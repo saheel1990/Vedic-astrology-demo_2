@@ -1,0 +1,15 @@
+{% if not authed %}
+<h2>Admin Analytics</h2>
+<form method="post">
+  <input name="password" type="password" placeholder="Admin password" style="padding:8px"/>
+  <button type="submit">View</button>
+</form>
+{% else %}
+<h2>Analytics Summary</h2>
+<p>Total events: {{ data.total_events }}</p>
+<ul>
+{% for t,c in data.by_type %}
+  <li>{{ t }} — {{ c }}</li>
+{% endfor %}
+</ul>
+{% endif %}
