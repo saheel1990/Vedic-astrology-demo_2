@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vedic Astrology</title>
+<link rel="stylesheet" href="/static/css/app.css"></head>
+<body>
+<div class="container">
+  <h1>Vedic Astrology — Demo</h1>
+  <div class="card">
+    <label>Name</label><input id="name" placeholder="Your name" value="Saheel">
+    <label>DOB (YYYY-MM-DD)</label><input id="dob" value="1990-04-20">
+    <label>UTC Birth ISO</label><input id="utc" value="1990-04-20T05:25:00+00:00">
+    <label>Latitude</label><input id="lat" value="16.7">
+    <label>Longitude</label><input id="lon" value="74.25">
+    <label>Tone</label>
+    <select id="tone"><option>Friendly</option><option>Neutral</option><option>Playful</option><option>Spiritual</option></select>
+    <button onclick="callPredict()">Get Prediction</button>
+    <pre id="out" class="card" style="margin-top:10px"></pre>
+  </div>
+  <footer>Analytics enabled • Admin: /admin/analytics</footer>
+</div>
+<script src="/static/js/app.js"></script>
+</body></html>
