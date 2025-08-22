@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+pyswisseph
+requests
+python-dateutil
+pydantic
+jinja2
+itsdangerous
