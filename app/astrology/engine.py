@@ -1,4 +1,6 @@
 # app/astrology/engine.py
+ENGINE_VERSION = "stub-1.0"
+
 from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime, timezone
