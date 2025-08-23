@@ -11,6 +11,7 @@ from app.astrology.rules import RuleLibrary
 from app.astrology.engine import compute_natal, compute_vimshottari_dasha_for_birth, current_transits, jd_from_datetime
 from app.services.phrasing import phrase_prediction
 from app.analytics.tracker import record_event_with_ga, query_summary
+from fastapi.responses import JSONResponse
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
 
@@ -73,3 +74,13 @@ def admin_dashboard_post(request: Request, password: str = Form(...)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
     summary = query_summary()
     return templates.TemplateResponse("dashboard.html", {"request": request, "authed": True, "data": summary})
+
+@app.exception_handler(Exception)
+async def json_exception_handler(request, exc):
+    # Optional: log/track here
+    try:
+        from app.analytics.tracker import record_event_with_ga
+        record_event_with_ga("prediction_error", {"error": str(exc)})
+    except Exception:
+        pass
+    return JSONResponse({"error": str(exc)}, status_code=500)
