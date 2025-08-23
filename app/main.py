@@ -12,11 +12,16 @@ from app.astrology.engine import compute_natal, compute_vimshottari_dasha_for_bi
 from app.services.phrasing import phrase_prediction
 from app.analytics.tracker import record_event_with_ga, query_summary
 from fastapi.responses import JSONResponse
+from app.astrology.engine import ENGINE_VERSION  # add this import
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
 
 app = FastAPI(title="Vedic Astrology — Production Demo")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/health")
+def health():
+    return {"ok": True, "engine": ENGINE_VERSION}
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
