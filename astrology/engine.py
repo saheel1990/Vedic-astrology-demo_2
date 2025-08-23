@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 import math
 import swisseph as sw
 
-# ---------- helpers ----------
+# ───────────────────────── Helpers ─────────────────────────
+
+# Use SWIEPH ephemeris and return speed to keep a stable return shape
+FLAGS = sw.FLG_SWIEPH | sw.FLG_SPEED
 
 def _scalar(v) -> float:
     """Flatten nested tuples/lists from Swiss Ephemeris until a float."""
@@ -31,10 +34,11 @@ def normalize_deg(x) -> float:
 def sign_from_longitude(lon) -> str:
     lon = normalize_deg(lon)
     idx = int(math.floor(lon / 30.0))
-    return [
+    signs = [
         "Aries","Taurus","Gemini","Cancer","Leo","Virgo",
         "Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"
-    ][idx]
+    ]
+    return signs[idx]
 
 def nakshatra_index_and_fraction(moon_lon: float) -> Tuple[int, float, float]:
     span = 360.0 / 27.0
@@ -44,15 +48,16 @@ def nakshatra_index_and_fraction(moon_lon: float) -> Tuple[int, float, float]:
     frac = (moon_lon - start) / span
     return idx, frac, span
 
-# ---------- constants ----------
+def calc_lon(jd_ut: float, body: int) -> float:
+    """Swiss Ephemeris ecliptic longitude (0..360) as a clean float."""
+    return normalize_deg(_scalar(sw.calc_ut(jd_ut, body, FLAGS)))
 
-# Use SWIEPH ephemeris + speed for consistent return shape
-FLAGS = sw.FLG_SWIEPH | sw.FLG_SPEED
+# ───────────────────────── Constants ─────────────────────────
 
 PLANETS = {
     "sun": sw.SUN, "moon": sw.MOON, "mercury": sw.MERCURY, "venus": sw.VENUS,
     "mars": sw.MARS, "jupiter": sw.JUPITER, "saturn": sw.SATURN,
-    "rahu": sw.MEAN_NODE, "ketu": sw.MEAN_NODE
+    "rahu": sw.MEAN_NODE, "ketu": sw.MEAN_NODE  # ketu = rahu + 180
 }
 
 VIM_DURATIONS_YEARS = {
@@ -61,7 +66,7 @@ VIM_DURATIONS_YEARS = {
 }
 VIM_SEQUENCE = ["ketu","venus","sun","moon","mars","rahu","jupiter","saturn","mercury"]
 
-# ---------- dataclasses ----------
+# ───────────────────────── Data classes ─────────────────────────
 
 @dataclass
 class NatalContext:
@@ -94,9 +99,15 @@ class DashaContext:
 class TransitContext:
     active: Dict[str, Any]
 
-# ---------- core ----------
+# ───────────────────────── Core calculations ─────────────────────────
 
 def compute_natal(birth) -> NatalContext:
+    """
+    birth must include:
+      - utc_iso: ISO datetime string WITH timezone (UTC recommended)
+      - latitude: float
+      - longitude: float
+    """
     if not getattr(birth, "utc_iso", None):
         raise ValueError("birth.utc_iso is required (e.g., 1990-04-20T05:25:00+00:00)")
     if not hasattr(birth, "latitude") or not hasattr(birth, "longitude"):
@@ -105,22 +116,18 @@ def compute_natal(birth) -> NatalContext:
     dt_utc = datetime.fromisoformat(birth.utc_iso).astimezone(timezone.utc)
     jd_ut = jd_from_datetime(dt_utc)
 
-    # Planets (force scalar)
+    # Planet longitudes
     longs: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
-            rahu = sw.calc_ut(jd_ut, PLANETS["rahu"], FLAGS)   # may be nested
-            rahu_lon = _scalar(rahu)
-            longs["ketu"] = normalize_deg(rahu_lon + 180.0)
+            rahu_lon = calc_lon(jd_ut, PLANETS["rahu"])
+            longs["ketu"] = (rahu_lon + 180.0) % 360.0
         else:
-            pos = sw.calc_ut(jd_ut, const, FLAGS)
-            lon = _scalar(pos)
-            longs[name] = normalize_deg(lon)
+            longs[name] = calc_lon(jd_ut, const)
 
-    # Houses
+    # House cusps (handle both 12 and 13-length returns)
     cusps_raw, _ascmc = sw.houses(jd_ut, float(birth.latitude), float(birth.longitude))
     cusps_list = list(cusps_raw)
-    # Some builds return 13 elements (0..12) with dummy 0th; normalize to 12 cusps:
     if len(cusps_list) >= 13 and abs(cusps_list[0]) < 1e-9:
         cusps_vals = cusps_list[1:13]
     else:
@@ -142,17 +149,22 @@ def compute_natal(birth) -> NatalContext:
     )
 
 def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
-    moon = sw.calc_ut(jd_ut, PLANETS["moon"], FLAGS)
-    moon_lon = normalize_deg(_scalar(moon))
+    moon_lon = calc_lon(jd_ut, PLANETS["moon"])
     nak_idx, frac, _ = nakshatra_index_and_fraction(moon_lon)
-    lord = VIM_SEQUENCE[nakshatra_index := (nak_idx % 9)]
+    lord = VIM_SEQUENCE[nak_idx % 9]
     remaining_years = VIM_DURATIONS_YEARS[lord] * (1.0 - frac)
 
     periods: List[DashaPeriod] = []
     ydays = 365.2425
     start = jd_ut - 1e-9
     end = start + remaining_years * ydays
-    periods.append(DashaPeriod(lord, start, end, datetime_from_jd(start).isoformat(), datetime_from_jd(end).isoformat()))
+    periods.append(DashaPeriod(
+        planet=lord,
+        start_jd=start,
+        end_jd=end,
+        start_iso=datetime_from_jd(start).isoformat(),
+        end_iso=datetime_from_jd(end).isoformat()
+    ))
 
     seq_idx = (VIM_SEQUENCE.index(lord) + 1) % len(VIM_SEQUENCE)
     cur = end
@@ -160,34 +172,52 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     while cur < max_jd:
         p = VIM_SEQUENCE[seq_idx % len(VIM_SEQUENCE)]
         nxt = cur + VIM_DURATIONS_YEARS[p] * ydays
-        periods.append(DashaPeriod(p, cur, nxt, datetime_from_jd(cur).isoformat(), datetime_from_jd(nxt).isoformat()))
+        periods.append(DashaPeriod(
+            planet=p,
+            start_jd=cur,
+            end_jd=nxt,
+            start_iso=datetime_from_jd(cur).isoformat(),
+            end_iso=datetime_from_jd(nxt).isoformat()
+        ))
         cur = nxt
         seq_idx += 1
 
     maha = periods[0].planet if periods else None
     antara = periods[1].planet if len(periods) > 1 else None
     praty = periods[2].planet if len(periods) > 2 else None
-    return DashaContext(maha, antara, praty, periods[0].start_iso, periods[0].end_iso, periods)
+
+    return DashaContext(
+        maha=maha,
+        antara=antara,
+        pratyantara=praty,
+        window_from=periods[0].start_iso,
+        window_to=periods[0].end_iso,
+        periods=periods
+    )
 
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
     if as_of_dt is None:
         as_of_dt = datetime.now(timezone.utc)
     jd_ut = jd_from_datetime(as_of_dt)
 
+    # Current longitudes
     cur: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
-            r = sw.calc_ut(jd_ut, PLANETS["rahu"], FLAGS)
-            cur["ketu"] = normalize_deg(_scalar(r) + 180.0)
+            rahu_lon = calc_lon(jd_ut, PLANETS["rahu"])
+            cur["ketu"] = (rahu_lon + 180.0) % 360.0
         else:
-            cur[name] = normalize_deg(_scalar(sw.calc_ut(jd_ut, const, FLAGS)))
+            cur[name] = calc_lon(jd_ut, const)
 
     active: Dict[str, Any] = {}
+
+    # Example triggers aligned to rulebook
     venus_sign = sign_from_longitude(cur["venus"])
     sat_sign = sign_from_longitude(cur["saturn"])
     active["venus_transit_7th"] = (venus_sign == natal.house_map.get("7"))
     active["saturn_in_10th"] = (sat_sign == natal.house_map.get("10"))
 
+    # Jupiter aspecting 10th lord (0/120/240 within orb)
     rulers = {
         "Aries": "mars","Taurus": "venus","Gemini": "mercury","Cancer": "moon",
         "Leo": "sun","Virgo": "mercury","Libra": "venus","Scorpio": "mars",
@@ -200,8 +230,8 @@ def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, o
         j = cur["jupiter"]
         lord_lon = natal.planet_longitudes[tenth_lord]
         for ang in (0, 120, 240):
-            tgt = abs(((j - lord_lon) - ang + 360.0) % 360.0)
-            if tgt <= orb_deg or abs(tgt - 360.0) <= orb_deg:
+            delta = abs(((j - lord_lon) - ang + 360.0) % 360.0)
+            if delta <= orb_deg or abs(delta - 360.0) <= orb_deg:
                 flag = True
                 break
     active["jupiter_aspecting_10th_lord"] = flag
