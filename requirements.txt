@@ -8,3 +8,4 @@ pydantic
 jinja2
 itsdangerous
 openpyxl
+python-multipart
