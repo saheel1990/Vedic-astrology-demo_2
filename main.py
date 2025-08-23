@@ -1,3 +1,12 @@
+from app.astrology.engine_stub import (
+    compute_natal,
+    compute_vimshottari_dasha_for_birth,
+    current_transits,
+    ENGINE_VERSION,
+)
+from datetime import datetime
+def jd_from_datetime(dt: datetime) -> float:
+    return dt.timestamp()/86400.0 + 2440587.5
 from fastapi import FastAPI, Request, Depends, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +20,7 @@ from app.astrology.rules import RuleLibrary
 from app.astrology.engine import compute_natal, compute_vimshottari_dasha_for_birth, current_transits, jd_from_datetime
 from app.services.phrasing import phrase_prediction
 from app.analytics.tracker import record_event_with_ga, query_summary
+
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
 
