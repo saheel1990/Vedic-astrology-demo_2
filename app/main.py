@@ -1,3 +1,16 @@
+
+# Use the stub only
+from app.astrology.engine_stub import (
+    compute_natal,
+    compute_vimshottari_dasha_for_birth,
+    current_transits,
+)
+from datetime import datetime
+
+def jd_from_datetime(dt: datetime) -> float:
+    return dt.timestamp()/86400.0 + 2440587.5
+
+
 from fastapi import FastAPI, Request, Depends, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -89,3 +102,12 @@ async def json_exception_handler(request, exc):
     except Exception:
         pass
     return JSONResponse({"error": str(exc)}, status_code=500)
+
+@app.get("/debug/engine")
+def debug_engine():
+    return {
+        "compute_natal_module": compute_natal.__module__,
+        "compute_vim_dasha_module": compute_vimshottari_dasha_for_birth.__module__,
+        "current_transits_module": current_transits.__module__,
+    }
+
