@@ -8,14 +8,10 @@ import swisseph as sw
 # ---------- helpers ----------
 
 def _scalar(v) -> float:
-    """Return the first numeric component as float (handles tuples/lists from swisseph)."""
-    if isinstance(v, (list, tuple)):
+    """Flatten nested tuples/lists from Swiss Ephemeris until a float."""
+    while isinstance(v, (list, tuple)) and len(v) > 0:
         v = v[0]
     return float(v)
-
-def _as_float(x) -> float:
-    """Coerce strings/ints/tuples to float safely."""
-    return _scalar(x)
 
 def jd_from_datetime(dt: datetime) -> float:
     ts = dt.timestamp()
@@ -34,33 +30,29 @@ def normalize_deg(x) -> float:
 
 def sign_from_longitude(lon) -> str:
     lon = normalize_deg(lon)
-    sign_index = int(math.floor(lon / 30.0))
-    signs = [
+    idx = int(math.floor(lon / 30.0))
+    return [
         "Aries","Taurus","Gemini","Cancer","Leo","Virgo",
         "Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"
-    ]
-    return signs[sign_index]
+    ][idx]
 
 def nakshatra_index_and_fraction(moon_lon: float) -> Tuple[int, float, float]:
     span = 360.0 / 27.0
     moon_lon = normalize_deg(moon_lon)
-    idx = int(math.floor(moon_lon / span))  # 0..26
+    idx = int(math.floor(moon_lon / span))
     start = idx * span
     frac = (moon_lon - start) / span
     return idx, frac, span
 
 # ---------- constants ----------
 
+# Use SWIEPH ephemeris + speed for consistent return shape
+FLAGS = sw.FLG_SWIEPH | sw.FLG_SPEED
+
 PLANETS = {
-    "sun": sw.SUN,
-    "moon": sw.MOON,
-    "mercury": sw.MERCURY,
-    "venus": sw.VENUS,
-    "mars": sw.MARS,
-    "jupiter": sw.JUPITER,
-    "saturn": sw.SATURN,
-    "rahu": sw.MEAN_NODE,  # mean node
-    "ketu": sw.MEAN_NODE   # compute as rahu + 180
+    "sun": sw.SUN, "moon": sw.MOON, "mercury": sw.MERCURY, "venus": sw.VENUS,
+    "mars": sw.MARS, "jupiter": sw.JUPITER, "saturn": sw.SATURN,
+    "rahu": sw.MEAN_NODE, "ketu": sw.MEAN_NODE
 }
 
 VIM_DURATIONS_YEARS = {
@@ -105,7 +97,7 @@ class TransitContext:
 # ---------- core ----------
 
 def compute_natal(birth) -> NatalContext:
-    if not hasattr(birth, "utc_iso") or not birth.utc_iso:
+    if not getattr(birth, "utc_iso", None):
         raise ValueError("birth.utc_iso is required (e.g., 1990-04-20T05:25:00+00:00)")
     if not hasattr(birth, "latitude") or not hasattr(birth, "longitude"):
         raise ValueError("birth.latitude and birth.longitude are required")
@@ -113,26 +105,27 @@ def compute_natal(birth) -> NatalContext:
     dt_utc = datetime.fromisoformat(birth.utc_iso).astimezone(timezone.utc)
     jd_ut = jd_from_datetime(dt_utc)
 
-    # Planets -> scalar longitudes
+    # Planets (force scalar)
     longs: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
-            rahu_lon = _scalar(sw.calc_ut(jd_ut, PLANETS["rahu"]))
+            rahu = sw.calc_ut(jd_ut, PLANETS["rahu"], FLAGS)   # may be nested
+            rahu_lon = _scalar(rahu)
             longs["ketu"] = normalize_deg(rahu_lon + 180.0)
         else:
-            lonp = _scalar(sw.calc_ut(jd_ut, const))
-            longs[name] = normalize_deg(lonp)
+            pos = sw.calc_ut(jd_ut, const, FLAGS)
+            lon = _scalar(pos)
+            longs[name] = normalize_deg(lon)
 
-    # Houses: ensure we convert every cusp to a scalar float
-    cusps_raw, _ascmc = sw.houses(jd_ut, _as_float(birth.latitude), _as_float(birth.longitude))
-    # Some builds return cusps indexed 1..12 with a dummy 0th; handle both safely:
+    # Houses
+    cusps_raw, _ascmc = sw.houses(jd_ut, float(birth.latitude), float(birth.longitude))
     cusps_list = list(cusps_raw)
+    # Some builds return 13 elements (0..12) with dummy 0th; normalize to 12 cusps:
     if len(cusps_list) >= 13 and abs(cusps_list[0]) < 1e-9:
-        # Typical format: index 1..12 are real cusps
-        cusps = [normalize_deg(_scalar(c)) for c in cusps_list[1:13]]
+        cusps_vals = cusps_list[1:13]
     else:
-        # Already 12 values
-        cusps = [normalize_deg(_scalar(c)) for c in cusps_list[:12]]
+        cusps_vals = cusps_list[:12]
+    cusps = [normalize_deg(_scalar(c)) for c in cusps_vals]
 
     asc_deg = cusps[0]
     house_map = {str(i + 1): sign_from_longitude(cusps[i]) for i in range(12)}
@@ -140,8 +133,8 @@ def compute_natal(birth) -> NatalContext:
 
     return NatalContext(
         utc_birth_dt=dt_utc,
-        latitude=_as_float(birth.latitude),
-        longitude=_as_float(birth.longitude),
+        latitude=float(birth.latitude),
+        longitude=float(birth.longitude),
         ascendant_deg=asc_deg,
         moon_sign=moon_sign,
         planet_longitudes=longs,
@@ -149,22 +142,17 @@ def compute_natal(birth) -> NatalContext:
     )
 
 def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
-    moon_lon = normalize_deg(_scalar(sw.calc_ut(jd_ut, PLANETS["moon"])))
+    moon = sw.calc_ut(jd_ut, PLANETS["moon"], FLAGS)
+    moon_lon = normalize_deg(_scalar(moon))
     nak_idx, frac, _ = nakshatra_index_and_fraction(moon_lon)
-    lord = VIM_SEQUENCE[nak_idx % 9]
+    lord = VIM_SEQUENCE[nakshatra_index := (nak_idx % 9)]
     remaining_years = VIM_DURATIONS_YEARS[lord] * (1.0 - frac)
 
     periods: List[DashaPeriod] = []
     ydays = 365.2425
     start = jd_ut - 1e-9
     end = start + remaining_years * ydays
-    periods.append(DashaPeriod(
-        planet=lord,
-        start_jd=start,
-        end_jd=end,
-        start_iso=datetime_from_jd(start).isoformat(),
-        end_iso=datetime_from_jd(end).isoformat()
-    ))
+    periods.append(DashaPeriod(lord, start, end, datetime_from_jd(start).isoformat(), datetime_from_jd(end).isoformat()))
 
     seq_idx = (VIM_SEQUENCE.index(lord) + 1) % len(VIM_SEQUENCE)
     cur = end
@@ -172,28 +160,14 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     while cur < max_jd:
         p = VIM_SEQUENCE[seq_idx % len(VIM_SEQUENCE)]
         nxt = cur + VIM_DURATIONS_YEARS[p] * ydays
-        periods.append(DashaPeriod(
-            planet=p,
-            start_jd=cur,
-            end_jd=nxt,
-            start_iso=datetime_from_jd(cur).isoformat(),
-            end_iso=datetime_from_jd(nxt).isoformat()
-        ))
+        periods.append(DashaPeriod(p, cur, nxt, datetime_from_jd(cur).isoformat(), datetime_from_jd(nxt).isoformat()))
         cur = nxt
         seq_idx += 1
 
     maha = periods[0].planet if periods else None
     antara = periods[1].planet if len(periods) > 1 else None
     praty = periods[2].planet if len(periods) > 2 else None
-
-    return DashaContext(
-        maha=maha,
-        antara=antara,
-        pratyantara=praty,
-        window_from=periods[0].start_iso,
-        window_to=periods[0].end_iso,
-        periods=periods
-    )
+    return DashaContext(maha, antara, praty, periods[0].start_iso, periods[0].end_iso, periods)
 
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
     if as_of_dt is None:
@@ -203,10 +177,10 @@ def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, o
     cur: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
-            r = _scalar(sw.calc_ut(jd_ut, PLANETS["rahu"]))
-            cur["ketu"] = normalize_deg(r + 180.0)
+            r = sw.calc_ut(jd_ut, PLANETS["rahu"], FLAGS)
+            cur["ketu"] = normalize_deg(_scalar(r) + 180.0)
         else:
-            cur[name] = normalize_deg(_scalar(sw.calc_ut(jd_ut, const)))
+            cur[name] = normalize_deg(_scalar(sw.calc_ut(jd_ut, const, FLAGS)))
 
     active: Dict[str, Any] = {}
     venus_sign = sign_from_longitude(cur["venus"])
@@ -215,9 +189,9 @@ def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, o
     active["saturn_in_10th"] = (sat_sign == natal.house_map.get("10"))
 
     rulers = {
-        "Aries": "mars", "Taurus": "venus", "Gemini": "mercury", "Cancer": "moon",
-        "Leo": "sun", "Virgo": "mercury", "Libra": "venus", "Scorpio": "mars",
-        "Sagittarius": "jupiter", "Capricorn": "saturn", "Aquarius": "saturn", "Pisces": "jupiter"
+        "Aries": "mars","Taurus": "venus","Gemini": "mercury","Cancer": "moon",
+        "Leo": "sun","Virgo": "mercury","Libra": "venus","Scorpio": "mars",
+        "Sagittarius": "jupiter","Capricorn": "saturn","Aquarius": "saturn","Pisces": "jupiter"
     }
     tenth_sign = natal.house_map.get("10", "")
     tenth_lord = rulers.get(tenth_sign)
