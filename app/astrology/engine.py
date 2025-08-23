@@ -57,6 +57,19 @@ def jd_from_datetime(dt: datetime) -> float:
     jd = ts / 86400.0 + 2440587.5
     return jd
 
+def _scalar(v):
+    # Swiss Ephemeris often returns (value, speed, ...). We only want the first number.
+    if isinstance(v, (list, tuple)):
+        v = v[0]
+    return float(v)
+
+def normalize_deg(x: float) -> float:
+    x = _scalar(x)  # <-- NEW: coerce tuples/lists to float
+    x = x % 360.0
+    if x < 0:
+        x += 360.0
+    return x
+
 def datetime_from_jd(jd: float) -> datetime:
     ts = (jd - 2440587.5) * 86400.0
     return datetime.fromtimestamp(ts, tz=timezone.utc)
