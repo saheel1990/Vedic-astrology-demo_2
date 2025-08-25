@@ -1,26 +1,52 @@
+// app/static/js/app.js  (v3)
 async function callPredict() {
   const out = document.getElementById('out');
   out.textContent = 'Working...';
 
-  const payload = {
-    name: document.getElementById('name').value || null,
-    dob: document.getElementById('dob').value,
-    utc_iso: document.getElementById('utc').value,
-    latitude: parseFloat(document.getElementById('latitude').value),
-    longitude: parseFloat(document.getElementById('longitude').value),
-    tone: document.getElementById('tone').value
-  };
+  const name = document.getElementById('name')?.value || null;
+  const dob  = document.getElementById('dob')?.value;
+  const utc  = document.getElementById('utc')?.value;
+  const tone = document.getElementById('tone')?.value || 'Friendly';
 
-  if (Number.isNaN(payload.latitude) || Number.isNaN(payload.longitude)) {
-    out.textContent = 'Please select Country → State → City (to set coordinates).';
+  // IMPORTANT: read the auto-filled hidden fields
+  const latStr = document.getElementById('latitude')?.value;
+  const lonStr = document.getElementById('longitude')?.value;
+
+  // Guardrails & helpful messages
+  if (!dob || !utc) {
+    out.textContent = 'Please enter DOB and UTC Birth ISO.';
+    return;
+  }
+  if (!latStr || !lonStr) {
+    out.textContent = 'Please pick Country → State → City so we can set latitude/longitude.';
     return;
   }
 
-  const res = await fetch('/api/v1/predict', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(payload)
-  });
-  out.textContent = JSON.stringify(await res.json(), null, 2);
-}
+  const latitude  = parseFloat(latStr);
+  const longitude = parseFloat(lonStr);
+  if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+    out.textContent = 'Coordinates missing or invalid. Select a city again.';
+    return;
+  }
 
+  const payload = { name, dob, utc_iso: utc, latitude, longitude, tone };
+
+  try {
+    const res = await fetch('/api/v1/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text();
+      out.textContent = `Server error (${res.status}): ${txt}`;
+      return;
+    }
+
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    out.textContent = `Failed: ${e?.message || e}`;
+  }
+}
