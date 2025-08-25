@@ -1,0 +1,17 @@
+[
+  {"country":"India","state":"Maharashtra","city":"Mumbai","lat":19.0760,"lon":72.8777},
+  {"country":"India","state":"Maharashtra","city":"Pune","lat":18.5204,"lon":73.8567},
+  {"country":"India","state":"Karnataka","city":"Bengaluru","lat":12.9716,"lon":77.5946},
+  {"country":"India","state":"Delhi","city":"New Delhi","lat":28.6139,"lon":77.2090},
+  {"country":"India","state":"Tamil Nadu","city":"Chennai","lat":13.0827,"lon":80.2707},
+  {"country":"India","state":"Telangana","city":"Hyderabad","lat":17.3850,"lon":78.4867},
+  {"country":"India","state":"West Bengal","city":"Kolkata","lat":22.5726,"lon":88.3639},
+  {"country":"India","state":"Gujarat","city":"Ahmedabad","lat":23.0225,"lon":72.5714},
+  {"country":"India","state":"Rajasthan","city":"Jaipur","lat":26.9124,"lon":75.7873},
+  {"country":"India","state":"Punjab","city":"Ludhiana","lat":30.9009,"lon":75.8573},
+  {"country":"India","state":"Uttar Pradesh","city":"Lucknow","lat":26.8467,"lon":80.9462},
+  {"country":"India","state":"Madhya Pradesh","city":"Bhopal","lat":23.2599,"lon":77.4126},
+  {"country":"India","state":"Odisha","city":"Bhubaneswar","lat":20.2961,"lon":85.8245},
+  {"country":"India","state":"Kerala","city":"Thiruvananthapuram","lat":8.5241,"lon":76.9366},
+  {"country":"India","state":"Assam","city":"Guwahati","lat":26.1445,"lon":91.7362}
+]
