@@ -1,4 +1,4 @@
-// app/static/js/app.js  (v3)
+// app/static/js/app.js (v4)
 async function callPredict() {
   const out = document.getElementById('out');
   out.textContent = 'Working...';
@@ -8,17 +8,16 @@ async function callPredict() {
   const utc  = document.getElementById('utc')?.value;
   const tone = document.getElementById('tone')?.value || 'Friendly';
 
-  // IMPORTANT: read the auto-filled hidden fields
+  // READ hidden fields populated by the City dropdown
   const latStr = document.getElementById('latitude')?.value;
   const lonStr = document.getElementById('longitude')?.value;
 
-  // Guardrails & helpful messages
   if (!dob || !utc) {
     out.textContent = 'Please enter DOB and UTC Birth ISO.';
     return;
   }
   if (!latStr || !lonStr) {
-    out.textContent = 'Please pick Country → State → City so we can set latitude/longitude.';
+    out.textContent = 'Please select Country → State → City so we can set latitude/longitude.';
     return;
   }
 
@@ -35,17 +34,13 @@ async function callPredict() {
     const res = await fetch('/api/v1/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
-
     if (!res.ok) {
-      const txt = await res.text();
-      out.textContent = `Server error (${res.status}): ${txt}`;
+      out.textContent = `Server error (${res.status}): ${await res.text()}`;
       return;
     }
-
-    const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    out.textContent = JSON.stringify(await res.json(), null, 2);
   } catch (e) {
     out.textContent = `Failed: ${e?.message || e}`;
   }
