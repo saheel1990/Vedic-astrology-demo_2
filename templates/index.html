@@ -28,6 +28,11 @@
     <label>City</label>
     <select id="city" required></select>
 
+    <!-- Hidden lat/lon populated from City -->
+<input type="hidden" id="latitude" />
+<input type="hidden" id="longitude" />
+
+
      <label>Tone</label>
     <select id="tone">
       <option>Friendly</option>
@@ -75,6 +80,7 @@
   const $city = document.getElementById("city");
   const $lat = document.getElementById("latitude");
   const $lon = document.getElementById("longitude");
+  const $preview = document.getElementById("coordPreview");
 
   function fillCountries() {
     $country.innerHTML = `<option value="">Select</option>` +
@@ -100,6 +106,9 @@
     if (!opt || !opt.dataset.lat) return;
     $lat.value = opt.dataset.lat;
     $lon.value = opt.dataset.lon;
+    if ($preview) {
+      $preview.textContent = `lat ${$lat.value}, lon ${$lon.value}`;
+    }
   }
 
   $country.addEventListener("change", fillStates);
