@@ -8,14 +8,10 @@ OUT = Path("app/data/rules.csv")
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
 def rule_to_trigger(rule):
-    # very simple mapping that plugs into your existing MVP triggers
-    house = rule.get("house")
-    theme = rule.get("theme", "General")
-    if house == 7 or theme == "Marriage":
-        return "venus_transit_7th"
-    if house == 10 or theme == "Career":
-        return "saturn_in_10th"
-    return "jupiter_aspecting_10th_lord"
+    theme = (rule.get("theme") or "General").strip().lower()
+    # encode theme directly into the trigger so we can match by theme later
+    return f"theme_{theme.replace(' ', '_')}"
+
 
 def main():
     if not IN.exists():
@@ -42,3 +38,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
