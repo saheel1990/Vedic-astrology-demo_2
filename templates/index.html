@@ -36,6 +36,19 @@
       <option>Spiritual</option>
     </select>
 
+    <small id="coordPreview" style="opacity:0.7;"></small>
+<script>
+  // Show coords when city changes
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'city') {
+      const lat = document.getElementById('latitude').value || '';
+      const lon = document.getElementById('longitude').value || '';
+      document.getElementById('coordPreview').textContent = lat && lon ? `lat ${lat}, lon ${lon}` : '';
+    }
+  });
+</script>
+
+
     <button onclick="callPredict()">Get Prediction</button>
     <pre id="out" class="card" style="margin-top:10px"></pre>
   </div>
