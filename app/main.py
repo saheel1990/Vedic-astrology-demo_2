@@ -63,6 +63,9 @@ def debug_engine():
         "current_transits_module": current_transits.__module__,
     }
 
+from fastapi.responses import JSONResponse
+import hashlib, random
+
 @app.post("/api/v1/predict")
 def predict(b: BirthPayload, request: Request):
     try:
@@ -71,38 +74,73 @@ def predict(b: BirthPayload, request: Request):
         dasha = compute_vimshottari_dasha_for_birth(jd)
         transits = current_transits(natal)
 
-        # Fire rules
-        fired = []
-        for r in rule_lib.rules:
-            if transits.active.get(r.trigger, False):
-                r.date_from = dasha.window_from
-                r.date_to = dasha.window_to
-                fired.append(r)
+        # --- Build a deterministic seed so different inputs pick different rules
+        seed_key = f"{b.name or ''}|{b.dob}|{b.utc_iso}|{natal.moon_sign}|{int(natal.ascendant_deg)}"
+        seed = int(hashlib.sha256(seed_key.encode()).hexdigest(), 16) % (2**32)
+        rng = random.Random(seed)
 
-        # Fallback if nothing fired
-        if not fired and rule_lib.rules:
-            fd = rule_lib.rules[0]
-            fd.date_from = dasha.window_from
-            fd.date_to = dasha.window_to
-            fired = [fd]
+        # --- Map stub transit flags to broad theme hints
+        theme_scores = {
+            "career": 0,
+            "marriage": 0,
+            "education": 0,
+            "wealth": 0,
+            "property": 0,
+            "travel": 0,
+            "health": 0,
+            "children": 0,
+            "litigation": 0,
+            "general": 0,
+        }
+        if transits.active.get("saturn_in_10th"):      theme_scores["career"] += 2
+        if transits.active.get("venus_transit_7th"):   theme_scores["marriage"] += 2
+        if transits.active.get("jupiter_aspecting_10th_lord"): theme_scores["education"] += 1; theme_scores["wealth"] += 1
 
-        # Phrase messages
+        # Add a tiny deterministic nudge from Moon sign, to vary users/dates
+        moon_bias = (hashlib.md5(natal.moon_sign.encode()).hexdigest()[0])
+        bias_bucket = "career" if moon_bias in "0123" else "marriage" if moon_bias in "456" else "education"
+        theme_scores[bias_bucket] += 1
+
+        # Pick a primary theme, then a secondary for "week" message
+        ordered = sorted(theme_scores.items(), key=lambda kv: kv[1], reverse=True)
+        primary_theme = ordered[0][0]
+        secondary_theme = ordered[1][0] if len(ordered) > 1 else "general"
+
+        # Select rules whose trigger encodes that theme
+        def pick_for(theme_name: str):
+            tag = f"theme_{theme_name}"
+            bucket = [r for r in rule_lib.rules if r.trigger.lower() == tag]
+            if not bucket:
+                # fallback to general, then any
+                bucket = [r for r in rule_lib.rules if r.trigger.lower() == "theme_general"] or rule_lib.rules
+            return rng.choice(bucket) if bucket else None
+
+        r1 = pick_for(primary_theme)
+        r2 = pick_for(secondary_theme)
+
+        fired = [r for r in (r1, r2) if r is not None]
+
+        # Dates from dasha window (kept simple)
+        for r in fired:
+            r.date_from = dasha.window_from
+            r.date_to = dasha.window_to
+
+        # Phrase
         phrased = [phrase_prediction(r, natal=natal, dasha=dasha, transits=transits, tone=b.tone) for r in fired]
-        today = phrased[0]["message"] if phrased else "A calm day. Focus on basics."
+        today = phrased[0]["message"] if phrased else "A steady period—work the basics."
         week = phrased[1]["message"] if len(phrased) > 1 else today
         key_dates = [{"from": r.date_from, "to": r.date_to, "theme": r.theme} for r in fired]
 
-        # Analytics
-        record_event_with_ga(
-            "prediction_requested",
-            {"tone": b.tone, "ip": request.client.host, "themes": [r.theme for r in fired]},
-        )
+        record_event_with_ga("prediction_requested", {
+            "tone": b.tone, "ip": request.client.host,
+            "themes": [r.theme for r in fired], "primary": primary_theme
+        })
 
         return {"today": today, "week": week, "key_dates": key_dates,
                 "dasha": {"maha": dasha.maha, "antara": dasha.antara}}
     except Exception as e:
-        # Always return JSON on error + show module in use
-        return JSONResponse({"error": str(e), "engine_mod": compute_natal.__module__}, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.get("/debug/rules")
 def debug_rules():
