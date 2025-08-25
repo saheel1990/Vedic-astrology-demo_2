@@ -18,5 +18,83 @@
   </div>
   <footer>Analytics enabled • Admin: /admin/analytics</footer>
 </div>
-<script src="/static/js/app.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", async function(){
+  const $country = document.getElementById("country");
+  const $state = document.getElementById("state");
+  const $city = document.getElementById("city");
+  const $lat = document.getElementById("latitude");
+  const $lon = document.getElementById("longitude");
+
+  // Fallback minimal list (used only if fetch fails)
+  const FALLBACK = [
+    {"country":"India","state":"Maharashtra","city":"Mumbai","lat":19.0760,"lon":72.8777},
+    {"country":"India","state":"Maharashtra","city":"Pune","lat":18.5204,"lon":73.8567},
+    {"country":"India","state":"Karnataka","city":"Bengaluru","lat":12.9716,"lon":77.5946},
+    {"country":"India","state":"Delhi","city":"New Delhi","lat":28.6139,"lon":77.2090}
+  ];
+
+  async function loadCities() {
+    try {
+      const res = await fetch("/static/cities_in.json?v=1", {cache:"no-store"});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch (e) {
+      console.warn("Using fallback cities because fetch failed:", e);
+      return FALLBACK;
+    }
+  }
+
+  function groupByCountry(cities) {
+    const byCountry = {};
+    for (const c of cities) {
+      if (!c.country || !c.state || !c.city) continue;
+      byCountry[c.country] ??= {};
+      byCountry[c.country][c.state] ??= [];
+      byCountry[c.country][c.state].push(c);
+    }
+    return byCountry;
+  }
+
+  function wire(byCountry) {
+    function fillCountries() {
+      $country.innerHTML = `<option value="">Select</option>` +
+        Object.keys(byCountry).sort().map(c=>`<option>${c}</option>`).join("");
+    }
+    function fillStates() {
+      const c = $country.value;
+      $state.innerHTML = `<option value="">Select</option>`;
+      $city.innerHTML = `<option value="">Select</option>`;
+      if (!c || !byCountry[c]) return;
+      const states = Object.keys(byCountry[c]).sort();
+      $state.innerHTML += states.map(s=>`<option>${s}</option>`).join("");
+    }
+    function fillCities() {
+      const c = $country.value, s = $state.value;
+      $city.innerHTML = `<option value="">Select</option>`;
+      if (!c || !s || !byCountry[c] || !byCountry[c][s]) return;
+      const list = byCountry[c][s].sort((a,b)=>a.city.localeCompare(b.city));
+      $city.innerHTML += list.map(x=>`<option data-lat="${x.lat}" data-lon="${x.lon}">${x.city}</option>`).join("");
+    }
+    function setLatLon() {
+      const opt = $city.options[$city.selectedIndex];
+      if (!opt || !opt.dataset.lat) return;
+      $lat.value = opt.dataset.lat;
+      $lon.value = opt.dataset.lon;
+    }
+    $country.addEventListener("change", fillStates);
+    $state.addEventListener("change", fillCities);
+    $city.addEventListener("change", setLatLon);
+
+    fillCountries();
+    if ($country.querySelector('option[value="India"]')) {
+      $country.value = "India";
+      fillStates();
+    }
+  }
+
+  const cities = await loadCities();
+  wire(groupByCountry(cities));
+});
+</script>
 </body></html>
