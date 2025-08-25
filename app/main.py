@@ -104,6 +104,17 @@ def predict(b: BirthPayload, request: Request):
         # Always return JSON on error + show module in use
         return JSONResponse({"error": str(e), "engine_mod": compute_natal.__module__}, status_code=500)
 
+@app.get("/debug/rules")
+def debug_rules():
+    return {
+        "count": len(rule_lib.rules),
+        "first": [
+            {"id": r.id, "theme": r.theme, "trigger": r.trigger, "message": r.message}
+            for r in rule_lib.rules[:5]
+        ],
+    }
+
+
 # ---- Admin analytics (password form) ----
 @app.get("/admin/analytics", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
