@@ -1,10 +1,27 @@
 # app/astrology/engine.py
 
-from dataclasses import dataclass
-from typing import Dict, Any, List, Tuple, Optional
-from datetime import datetime, timezone
-import math
-import swisseph as sw
+# Try real KP engine first, fallback to stub if import fails
+try:
+    from app.astrology.engine import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+        ENGINE_VERSION,
+        jd_from_datetime,
+    )
+except Exception:
+    from app.astrology.engine_stub import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+        ENGINE_VERSION,
+    )
+    from datetime import datetime
+    def jd_from_datetime(dt: datetime) -> float:
+        return dt.timestamp() / 86400.0 + 2440587.5
+
 
 # ───────────── Swiss Ephemeris config (KP ayanāṃśa, Moshier mode) ─────────────
 FLAGS = sw.FLG_MOSEPH | sw.FLG_SPEED | sw.FLG_SIDEREAL
