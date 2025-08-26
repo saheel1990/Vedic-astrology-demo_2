@@ -27,6 +27,74 @@ class DashaPeriod:
     start_iso: str
     end_iso: str
 
+# app/astrology/engine.py
+
+VIM_SEQUENCE = ["ketu","venus","sun","moon","mars","rahu","jupiter","saturn","mercury"]
+VIM_DURATIONS_YEARS = {
+    "ketu": 7.0, "venus": 20.0, "sun": 6.0, "moon": 10.0, "mars": 7.0,
+    "rahu": 18.0, "jupiter": 16.0, "saturn": 19.0, "mercury": 17.0
+}
+VIM_TOTAL = sum(VIM_DURATIONS_YEARS[p] for p in VIM_SEQUENCE)  # 120.0
+
+def subdivide_vimshottari(dasha_ctx, levels: int = 2):
+    """
+    Return list of dicts for subperiods:
+      [{"level":"antara","lord":"venus","start_iso":..., "end_iso":..., "parent":"saturn"}, ...]
+    levels: 1 -> Maha only, 2 -> Antara inside each Maha, 3 -> Pratyantara inside each Antara
+    """
+    out = []
+    ydays = 365.2425
+
+    def add_block(level, lord, start_jd, end_jd, parent=None):
+        out.append({
+            "level": level,
+            "lord": lord,
+            "parent": parent,
+            "start_jd": start_jd,
+            "end_jd": end_jd,
+            "start_iso": datetime_from_jd(start_jd).isoformat(),
+            "end_iso": datetime_from_jd(end_jd).isoformat(),
+        })
+
+    for maha in dasha_ctx.periods:
+        m_lord = maha.planet.lower()
+        m_start = maha.start_jd
+        m_end   = maha.end_jd
+        add_block("maha", m_lord, m_start, m_end, parent=None)
+        if levels < 2: 
+            continue
+
+        # Antara lengths are proportional to each lord's years over 120 of the *maha duration*
+        m_len_days = m_end - m_start
+        cursor = m_start
+        for lord in VIM_SEQUENCE:
+            frac = VIM_DURATIONS_YEARS[lord] / VIM_TOTAL
+            span = m_len_days * frac
+            a_start, a_end = cursor, min(cursor + span, m_end)
+            add_block("antara", lord, a_start, a_end, parent=m_lord)
+            cursor = a_end
+            if cursor >= m_end - 1e-6:
+                break
+
+        if levels < 3:
+            continue
+
+        # Pratyantara inside each antara, same proportional rule
+        # (iterate over the antara blocks we just created for this maha)
+        for a in [x for x in out if x["level"]=="antara" and x["parent"]==m_lord and x["start_jd"]>=m_start-1e-6 and x["end_jd"]<=m_end+1e-6]:
+            a_len = a["end_jd"] - a["start_jd"]
+            cursor = a["start_jd"]
+            for lord2 in VIM_SEQUENCE:
+                frac2 = VIM_DURATIONS_YEARS[lord2] / VIM_TOTAL
+                span2 = a_len * frac2
+                p_start, p_end = cursor, min(cursor + span2, a["end_jd"])
+                add_block("pratyantara", lord2, p_start, p_end, parent=a["lord"])
+                cursor = p_end
+                if cursor >= a["end_jd"] - 1e-6:
+                    break
+
+    return out
+
 @dataclass
 class DashaContext:
     maha: Optional[str]
