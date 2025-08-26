@@ -1,5 +1,26 @@
 # app/main.py
 
+try:
+    from app.astrology.engine import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+        ENGINE_VERSION,
+        jd_from_datetime,
+    )
+except Exception:
+    from app.astrology.engine_stub import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+        ENGINE_VERSION,
+    )
+    from datetime import datetime
+    def jd_from_datetime(dt: datetime) -> float:
+        return dt.timestamp() / 86400.0 + 2440587.5
+
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
