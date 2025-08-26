@@ -1,1 +1,212 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vedic Astrology</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <style>
+    #lat, #lon, label[for="lat"], label[for="lon"] { display:none !important; }
+  </style>
+  <!-- TEMPLATE_VERSION: 2025-08-26-03 -->
+</head>
+<body>
+<div class="container">
+  <h1>Vedic Astrology — Demo (v3)</h1>
+  <div class="card">
+    <label>Name</label>
+    <input id="name" placeholder="Your name" value="Saheel">
+
+    <label>DOB (YYYY-MM-DD)</label>
+    <input id="dob" value="1990-04-20">
+
+    <label>UTC Birth ISO</label>
+    <input id="utc" value="1990-04-20T05:25:00+00:00">
+
+    <!-- Location -->
+    <label>Country</label>
+    <select id="country" required></select>
+
+    <label>State</label>
+    <select id="state" required></select>
+
+    <label>City</label>
+    <select id="city" required></select>
+
+    <!-- Hidden lat/lon populated from City -->
+    <input type="hidden" id="latitude" />
+    <input type="hidden" id="longitude" />
+    <small id="coordPreview" style="opacity:0.7;display:block;margin:6px 0;"></small>
+
+    <!-- NEW: Specific question -->
+    <label>Question</label>
+    <select id="question" required>
+      <option value="marriage">When will my marriage take place?</option>
+      <option value="child">When will I likely have a child?</option>
+      <option value="promotion">When am I expected to get a promotion?</option>
+      <option value="travel">When am I likely to travel abroad?</option>
+    </select>
+
+    <label>Tone</label>
+    <select id="tone">
+      <option>Friendly</option>
+      <option>Neutral</option>
+      <option>Playful</option>
+      <option>Spiritual</option>
+    </select>
+
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+      <button id="btnPredict" type="button">Get Prediction</button>
+      <button id="btnEvent" type="button">Get Event Window</button>
+    </div>
+
+    <pre id="out" class="card" style="margin-top:10px"></pre>
+  </div>
+  <footer>Analytics enabled • Admin: /admin/analytics</footer>
+</div>
+
+<!-- City dropdowns -->
+<script>
+(function(){
+  const $country = document.getElementById("country");
+  const $state   = document.getElementById("state");
+  const $city    = document.getElementById("city");
+  const $lat     = document.getElementById("latitude");
+  const $lon     = document.getElementById("longitude");
+  const $preview = document.getElementById("coordPreview");
+
+  const FALLBACK = [
+    {"country":"India","state":"Maharashtra","city":"Mumbai","lat":19.0760,"lon":72.8777},
+    {"country":"India","state":"Maharashtra","city":"Pune","lat":18.5204,"lon":73.8567},
+    {"country":"India","state":"Karnataka","city":"Bengaluru","lat":12.9716,"lon":77.5946},
+    {"country":"India","state":"Delhi","city":"New Delhi","lat":28.6139,"lon":77.2090}
+  ];
+
+  async function loadCities(){
+    try {
+      const res = await fetch("/static/cities_in.json?v=6", {cache:"no-store"});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch (e) {
+      console.warn("Using fallback cities:", e);
+      return FALLBACK;
+    }
+  }
+
+  function groupByCountry(cities){
+    const by = {};
+    for (const c of cities) {
+      if (!c.country || !c.state || !c.city) continue;
+      (by[c.country] ||= {});
+      (by[c.country][c.state] ||= []).push(c);
+    }
+    return by;
+  }
+
+  function wire(byCountry){
+    function fillCountries(){
+      $country.innerHTML = `<option value="">Select</option>` +
+        Object.keys(byCountry).sort().map(c=>`<option>${c}</option>`).join("");
+    }
+    function fillStates(){
+      const c = $country.value;
+      $state.innerHTML = `<option value="">Select</option>`;
+      $city .innerHTML = `<option value="">Select</option>`;
+      if (!c || !byCountry[c]) return;
+      const states = Object.keys(byCountry[c]).sort();
+      $state.innerHTML += states.map(s=>`<option>${s}</option>`).join("");
+    }
+    function fillCities(){
+      const c = $country.value, s = $state.value;
+      $city.innerHTML = `<option value="">Select</option>`;
+      if (!c || !s || !byCountry[c] || !byCountry[c][s]) return;
+      const list = byCountry[c][s].sort((a,b)=>a.city.localeCompare(b.city));
+      $city.innerHTML += list.map(x=>`<option data-lat="${x.lat}" data-lon="${x.lon}">${x.city}</option>`).join("");
+    }
+    function setLatLon(){
+      const opt = $city.options[$city.selectedIndex];
+      if (!opt || !opt.dataset.lat) return;
+      $lat.value = opt.dataset.lat;
+      $lon.value = opt.dataset.lon;
+      if ($preview) $preview.textContent = `lat ${$lat.value}, lon ${$lon.value}`;
+    }
+
+    $country.addEventListener("change", fillStates);
+    $state.addEventListener("change", fillCities);
+    $city.addEventListener("change", setLatLon);
+
+    fillCountries();
+    const india = $country.querySelector('option[value="India"]');
+    if (india) { $country.value = "India"; fillStates(); }
+  }
+
+  loadCities().then(cs => wire(groupByCountry(cs)));
+})();
+</script>
+
+<!-- Buttons -->
+<script>
+(function(){
+  async function callPredict(){
+    const out = document.getElementById('out');
+    if (out) out.textContent = 'Working...';
+
+    const payload = {
+      name: document.getElementById('name')?.value || null,
+      dob: document.getElementById('dob')?.value,
+      utc_iso: document.getElementById('utc')?.value,
+      latitude: parseFloat(document.getElementById('latitude')?.value || 'NaN'),
+      longitude: parseFloat(document.getElementById('longitude')?.value || 'NaN'),
+      tone: document.getElementById('tone')?.value || 'Friendly'
+    };
+
+    try {
+      const res = await fetch('/api/v1/predict', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text();
+      if (!res.ok) { out.textContent = `Server error (${res.status}): ${txt}`; return; }
+      try { out.textContent = JSON.stringify(JSON.parse(txt), null, 2); }
+      catch { out.textContent = txt; }
+    } catch (e) {
+      out.textContent = `Failed: ${e?.message || e}`;
+    }
+  }
+
+  async function callEvent(){
+    const out = document.getElementById('out');
+    if (out) out.textContent = 'Working...';
+
+    const payload = {
+      name: document.getElementById('name')?.value || null,
+      dob: document.getElementById('dob')?.value,
+      utc_iso: document.getElementById('utc')?.value,
+      latitude: parseFloat(document.getElementById('latitude')?.value || 'NaN'),
+      longitude: parseFloat(document.getElementById('longitude')?.value || 'NaN'),
+      question: document.getElementById('question')?.value,
+      tone: document.getElementById('tone')?.value || 'Friendly'
+    };
+
+    try {
+      const res = await fetch('/api/v1/predict_event', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text();
+      if (!res.ok) { out.textContent = `Server error (${res.status}): ${txt}`; return; }
+      try { out.textContent = JSON.stringify(JSON.parse(txt), null, 2); }
+      catch { out.textContent = txt; }
+    } catch (e) {
+      out.textContent = `Failed: ${e?.message || e}`;
+    }
+  }
+
+  document.getElementById('btnPredict')?.addEventListener('click', callPredict);
+  document.getElementById('btnEvent')?.addEventListener('click', callEvent);
+})();
+</script>
+</body>
+</html>
 
