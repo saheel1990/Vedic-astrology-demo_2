@@ -1,12 +1,13 @@
 # app/main.py
 # top of app/main.py
-try:
-    from app.astrology.engine import (
-        compute_natal,
-        compute_vimshottari_dasha_for_birth,
-        current_transits,
-        subdivide_vimshottari,
-    )
+# Engine imports — use stub (since real engine.py is not present)
+from app.astrology.engine_stub import (
+    compute_natal,
+    compute_vimshottari_dasha_for_birth,
+    current_transits,
+    subdivide_vimshottari,
+)
+
 except ImportError:
     from app.astrology.engine_stub import (
         compute_natal,
@@ -25,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from app.astrology.engine import subdivide_vimshottari
+from app.astrology.engine_stub import subdivide_vimshottari
 import os
 
 # Rules (Excel/CSV loader)
