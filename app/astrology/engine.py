@@ -6,8 +6,7 @@ from datetime import datetime, timezone
 import math
 import swisseph as sw
 
-# ───────────── Swiss Ephemeris config (KP ayanāṃśa, no data files needed) ─────────────
-# Moshier algorithm (no se*.se1 files required) + sidereal mode (KP)
+# ───────────── Swiss Ephemeris config (KP ayanāṃśa, Moshier mode) ─────────────
 FLAGS = sw.FLG_MOSEPH | sw.FLG_SPEED | sw.FLG_SIDEREAL
 sw.set_sid_mode(sw.SIDM_KP)
 
@@ -111,14 +110,14 @@ def compute_natal(birth) -> NatalContext:
       - longitude: float
     """
     if not getattr(birth, "utc_iso", None):
-        raise ValueError("birth.utc_iso is required (e.g., 1990-04-20T05:25:00+00:00)")
+        raise ValueError("birth.utc_iso is required")
     if not hasattr(birth, "latitude") or not hasattr(birth, "longitude"):
         raise ValueError("birth.latitude and birth.longitude are required")
 
     dt_utc = datetime.fromisoformat(birth.utc_iso).astimezone(timezone.utc)
     jd_ut = jd_from_datetime(dt_utc)
 
-    # Planets (sidereal, KP)
+    # Planets (sidereal KP)
     longs: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
@@ -127,11 +126,9 @@ def compute_natal(birth) -> NatalContext:
         else:
             longs[name] = calc_lon(jd_ut, const)
 
-    # Houses / Ascendant
-    # sw.houses returns (cusps, ascmc). Use Placidus (default) or 'P' explicitly if needed.
+    # Houses
     cusps_raw, _ascmc = sw.houses(jd_ut, float(birth.latitude), float(birth.longitude))
     cusps_list = list(cusps_raw)
-    # Some builds return 13 values with 0 at index 0; handle both
     if len(cusps_list) >= 13 and abs(cusps_list[0]) < 1e-9:
         cusps_vals = cusps_list[1:13]
     else:
@@ -154,15 +151,14 @@ def compute_natal(birth) -> NatalContext:
 
 def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     """
-    KP-style Vimshottari start:
-      - Determine Moon’s nakshatra and the fraction elapsed at birth (sidereal, KP).
-      - The first Maha is ONLY the remaining slice, not the full duration.
-      - Then cycle through the full sequence up to ~120 years.
+    KP-style Vimshottari:
+      - Start from Moon’s nakshatra fraction.
+      - First Maha = remaining slice only.
+      - Then roll through ~120 years.
     """
     moon_lon = calc_lon(jd_ut, PLANETS["moon"])
     nak_idx, frac, _ = nakshatra_index_and_fraction(moon_lon)
     lord = VIM_SEQUENCE[nak_idx % 9]
-
     remaining_years = VIM_DURATIONS_YEARS[lord] * (1.0 - frac)
 
     periods: List[DashaPeriod] = []
@@ -177,7 +173,6 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
         end_iso=datetime_from_jd(end).isoformat(),
     ))
 
-    # roll forward
     seq_idx = (VIM_SEQUENCE.index(lord) + 1) % len(VIM_SEQUENCE)
     cur = end
     max_jd = start + 120.0 * ydays + 1.0
@@ -208,9 +203,7 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     )
 
 def subdivide_vimshottari(dasha_ctx, levels: int = 2):
-    """
-    Split each Maha proportionally into Antara (and Pratyantara) using standard Vim ratios.
-    """
+    """Split Maha into Antara (and Pratyantara) with Vimshottari ratios."""
     out: List[Dict[str, Any]] = []
 
     def add_block(level, lord, start_jd, end_jd, parent=None):
@@ -223,8 +216,6 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
             "start_iso": datetime_from_jd(start_jd).isoformat(),
             "end_iso": datetime_from_jd(end_jd).isoformat(),
         })
-
-    ydays = 365.2425
 
     for maha in getattr(dasha_ctx, "periods", []):
         m_lord = (maha.planet or "").lower()
@@ -247,8 +238,7 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
         if levels < 3:
             continue
 
-        # pratyantara inside each antara
-        for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord and m_start - 1e-6 <= x["start_jd"] <= m_end + 1e-6]:
+        for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord]:
             a_len = a["end_jd"] - a["start_jd"]
             cursor = a["start_jd"]
             for lord2 in VIM_SEQUENCE:
@@ -267,7 +257,6 @@ def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, o
         as_of_dt = datetime.now(timezone.utc)
     jd_ut = jd_from_datetime(as_of_dt)
 
-    # Current longitudes (sidereal KP)
     cur: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
@@ -277,14 +266,11 @@ def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, o
             cur[name] = calc_lon(jd_ut, const)
 
     active: Dict[str, Any] = {}
-
-    # Example triggers (align with your rules.csv keys)
     venus_sign = sign_from_longitude(cur["venus"])
     sat_sign = sign_from_longitude(cur["saturn"])
     active["venus_transit_7th"] = (venus_sign == natal.house_map.get("7"))
     active["saturn_in_10th"] = (sat_sign == natal.house_map.get("10"))
 
-    # Jupiter aspecting 10th lord (approx 0/120/240 within orb)
     rulers = {
         "Aries": "mars","Taurus": "venus","Gemini": "mercury","Cancer": "moon",
         "Leo": "sun","Virgo": "mercury","Libra": "venus","Scorpio": "mars",
