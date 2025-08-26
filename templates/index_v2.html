@@ -47,11 +47,19 @@
       <option>Spiritual</option>
     </select>
 
-    <button id="btnPredict" type="button">Get Prediction</button>
-    <pre id="out" class="card" style="margin-top:10px"></pre>
-  </div>
-  <footer>Analytics enabled • Admin: /admin/analytics</footer>
+    <label>Question</label>
+<select id="question" required>
+  <option value="marriage">When will my marriage take place?</option>
+  <option value="child">When will I likely have a child?</option>
+  <option value="promotion">When am I expected to get a promotion?</option>
+  <option value="travel">When am I likely to travel abroad?</option>
+</select>
+
+<div style="display:flex; gap:8px; flex-wrap:wrap;">
+  <button id="btnPredict" type="button">Get Prediction</button>
+  <button id="btnEvent" type="button">Get Event Window</button>
 </div>
+  
 
 <!-- Location dropdowns + Predict all inline -->
 <script>
@@ -173,5 +181,51 @@
   window.callPredict = callPredict; // expose for debugging if needed
 })();
 </script>
+    <script>
+(function(){
+  async function callEvent(){
+    const out = document.getElementById('out');
+    if (out) out.textContent = 'Working...';
+
+    const payload = {
+      name: document.getElementById('name')?.value || null,
+      dob: document.getElementById('dob')?.value,
+      utc_iso: document.getElementById('utc')?.value,
+      country: document.getElementById('country')?.value || null,
+      state: document.getElementById('state')?.value || null,
+      city: document.getElementById('city')?.value || null,
+      latitude: parseFloat(document.getElementById('latitude')?.value || 'NaN'),
+      longitude: parseFloat(document.getElementById('longitude')?.value || 'NaN'),
+      question: document.getElementById('question')?.value,
+      tone: document.getElementById('tone')?.value || 'Friendly'
+    };
+
+    if (!payload.utc_iso || !payload.dob) { out.textContent = 'Enter DOB and UTC Birth ISO.'; return; }
+    if (Number.isNaN(payload.latitude) || Number.isNaN(payload.longitude)) {
+      out.textContent = 'Select Country → State → City.';
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/v1/predict_event', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text();
+      if (!res.ok) { out.textContent = `Server error (${res.status}): ${txt}`; return; }
+      try { out.textContent = JSON.stringify(JSON.parse(txt), null, 2); }
+      catch { out.textContent = txt; }
+    } catch (e) {
+      out.textContent = `Failed: ${e?.message || e}`;
+    }
+  }
+
+  const btnE = document.getElementById('btnEvent');
+  if (btnE) btnE.addEventListener('click', callEvent);
+  window.callEvent = callEvent; // for debugging if needed
+})();
+</script>
+
 </body>
 </html>
