@@ -27,7 +27,8 @@ class DashaPeriod:
     start_iso: str
     end_iso: str
 
-# app/astrology/engine.py
+# ---- Vimshottari subdivision helpers (stub) ----
+from datetime import datetime, timezone
 
 VIM_SEQUENCE = ["ketu","venus","sun","moon","mars","rahu","jupiter","saturn","mercury"]
 VIM_DURATIONS_YEARS = {
@@ -36,15 +37,18 @@ VIM_DURATIONS_YEARS = {
 }
 VIM_TOTAL = sum(VIM_DURATIONS_YEARS[p] for p in VIM_SEQUENCE)  # 120.0
 
+def _datetime_from_jd(jd: float) -> datetime:
+    ts = (jd - 2440587.5) * 86400.0
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
 def subdivide_vimshottari(dasha_ctx, levels: int = 2):
     """
     Return list of dicts for subperiods:
-      [{"level":"antara","lord":"venus","start_iso":..., "end_iso":..., "parent":"saturn"}, ...]
-    levels: 1 -> Maha only, 2 -> Antara inside each Maha, 3 -> Pratyantara inside each Antara
+      [{"level":"antara"|"pratyantara"|"maha","lord":"venus","start_jd":...,"end_jd":...,
+        "start_iso": "...", "end_iso":"...", "parent":"saturn"(optional)}]
+    levels: 1 -> Maha only, 2 -> Antara within each Maha, 3 -> Pratyantara within each Antara
     """
     out = []
-    ydays = 365.2425
-
     def add_block(level, lord, start_jd, end_jd, parent=None):
         out.append({
             "level": level,
@@ -52,24 +56,24 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
             "parent": parent,
             "start_jd": start_jd,
             "end_jd": end_jd,
-            "start_iso": datetime_from_jd(start_jd).isoformat(),
-            "end_iso": datetime_from_jd(end_jd).isoformat(),
+            "start_iso": _datetime_from_jd(start_jd).isoformat(),
+            "end_iso": _datetime_from_jd(end_jd).isoformat(),
         })
 
-    for maha in dasha_ctx.periods:
-        m_lord = maha.planet.lower()
-        m_start = maha.start_jd
-        m_end   = maha.end_jd
+    # Iterate Maha periods from existing dasha_ctx
+    for maha in getattr(dasha_ctx, "periods", []):
+        m_lord = (maha.planet or "").lower()
+        m_start, m_end = float(maha.start_jd), float(maha.end_jd)
         add_block("maha", m_lord, m_start, m_end, parent=None)
-        if levels < 2: 
+        if levels < 2:
             continue
 
-        # Antara lengths are proportional to each lord's years over 120 of the *maha duration*
-        m_len_days = m_end - m_start
+        # Antara: split Maha proportionally (lord years / 120)
+        m_len = m_end - m_start
         cursor = m_start
         for lord in VIM_SEQUENCE:
             frac = VIM_DURATIONS_YEARS[lord] / VIM_TOTAL
-            span = m_len_days * frac
+            span = m_len * frac
             a_start, a_end = cursor, min(cursor + span, m_end)
             add_block("antara", lord, a_start, a_end, parent=m_lord)
             cursor = a_end
@@ -79,9 +83,8 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
         if levels < 3:
             continue
 
-        # Pratyantara inside each antara, same proportional rule
-        # (iterate over the antara blocks we just created for this maha)
-        for a in [x for x in out if x["level"]=="antara" and x["parent"]==m_lord and x["start_jd"]>=m_start-1e-6 and x["end_jd"]<=m_end+1e-6]:
+        # Pratyantara: split each antara proportionally
+        for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord and m_start - 1e-6 <= x["start_jd"] <= m_end + 1e-6]:
             a_len = a["end_jd"] - a["start_jd"]
             cursor = a["start_jd"]
             for lord2 in VIM_SEQUENCE:
@@ -94,6 +97,7 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
                     break
 
     return out
+
 
 @dataclass
 class DashaContext:
