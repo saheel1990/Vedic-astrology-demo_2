@@ -257,6 +257,16 @@ def predict_event(b: EventPayload, request: Request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+import importlib, traceback
+
+@app.get("/debug/engine_import")
+def debug_engine_import():
+    try:
+        mod = importlib.import_module("app.astrology.engine")
+        return {"ok": True, "engine": getattr(mod, "ENGINE_VERSION", "unknown")}
+    except Exception:
+        return {"ok": False, "error": traceback.format_exc()}
+
 
 # --------------------------- Admin (analytics) ---------------------------
 
