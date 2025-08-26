@@ -6,19 +6,31 @@ from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime, timezone
 import math
 
-# Swiss Ephemeris (pyswisseph) — import FIRST
+# ───────── Swiss Ephemeris import FIRST ─────────
 try:
     import swisseph as sw
 except Exception as e:
     raise ImportError(
         "pyswisseph is missing or failed to import. "
-        "Add 'pyswisseph>=2.10' to requirements.txt and use Python 3.11."
+        "Add 'pyswisseph>=2.10' to requirements.txt and pin Python to 3.11 in runtime.txt"
     ) from e
 
+# ───────── Swiss Ephemeris config (KP ayanamsa, Moshier mode) ─────────
+FLAGS = getattr(sw, "FLG_MOSEPH", 0) | getattr(sw, "FLG_SPEED", 0) | getattr(sw, "FLG_SIDEREAL", 0)
 
-# ───────────── Swiss Ephemeris config (KP ayanāṃśa, Moshier mode) ─────────────
-FLAGS = sw.FLG_MOSEPH | sw.FLG_SPEED | sw.FLG_SIDEREAL
-sw.set_sid_mode(sw.SIDM_KP)
+# Some builds name the KP ayanāṃśa constant SIDM_KRISHNAMURTI instead of SIDM_KP.
+if hasattr(sw, "SIDM_KP"):
+    _KP_CONST = sw.SIDM_KP
+elif hasattr(sw, "SIDM_KRISHNAMURTI"):
+    _KP_CONST = sw.SIDM_KRISHNAMURTI
+else:
+    # Fallback so we don't crash; Lahiri is widely available.
+    _KP_CONST = getattr(sw, "SIDM_LAHIRI", 0)
+
+sw.set_sid_mode(_KP_CONST)
+
+ENGINE_VERSION = "kp-ephem-1.0"
+
 
 # ───────────── Helpers ─────────────
 
