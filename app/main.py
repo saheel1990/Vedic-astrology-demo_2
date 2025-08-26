@@ -1,5 +1,5 @@
 # app/main.py
-
+# ---- Load real KP engine first; fall back to stub if it fails ----
 try:
     from app.astrology.engine import (
         compute_natal,
@@ -9,7 +9,7 @@ try:
         ENGINE_VERSION,
         jd_from_datetime,
     )
-except Exception:
+except Exception as _engine_err:
     from app.astrology.engine_stub import (
         compute_natal,
         compute_vimshottari_dasha_for_birth,
@@ -20,6 +20,7 @@ except Exception:
     from datetime import datetime
     def jd_from_datetime(dt: datetime) -> float:
         return dt.timestamp() / 86400.0 + 2440587.5
+
 
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -33,14 +34,6 @@ from datetime import datetime, timezone
 import calendar
 import os
 
-# ---- Engine: use STUB ONLY (no swiss ephemeris needed) ----
-from app.astrology.engine_stub import (
-    compute_natal,
-    compute_vimshottari_dasha_for_birth,
-    current_transits,
-    subdivide_vimshottari,
-    ENGINE_VERSION,  # visible in /health
-)
 
 # ---- Rules & phrasing / analytics ----
 from app.astrology.rules import RuleLibrary
@@ -97,10 +90,6 @@ QUESTION_FOCUS: Dict[str, List[str]] = {
 
 
 # --------------------------- Helpers ---------------------------
-
-def jd_from_datetime(dt: datetime) -> float:
-    # Julian Day from UTC datetime (no external deps)
-    return dt.timestamp() / 86400.0 + 2440587.5
 
 def _month_year_from_iso(iso_str: str):
     dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
