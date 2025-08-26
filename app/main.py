@@ -95,6 +95,19 @@ def _month_year_from_iso(iso_str: str):
     dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     return dt.year, dt.month
 
+def age_years_at_jd(birth_jd: float, jd: float) -> float:
+    return max(0.0, (jd - birth_jd) / 365.2425)
+
+AGE_MIN = {
+    "marriage": 15.0,
+    "child":    15.0,
+    "promotion":18.0,
+    "travel":   1.0,  # can be earlier; tweak as you like
+}
+
+def age_years_at_jd(birth_jd: float, jd: float) -> float:
+    return max(0.0, (jd - birth_jd) / 365.2425)
+
 
 # --------------------------- Routes ---------------------------
 
@@ -117,6 +130,68 @@ def health():
         "module": compute_natal.__module__,
     }
 
+@app.get("/debug/nakshatra")
+def debug_nakshatra(utc_iso: str, lat: float = 0.0, lon: float = 0.0):
+    """
+    Debug endpoint: show Moon longitude, nakshatra, and dasha balance for a given birth datetime.
+    Example:
+      /debug/nakshatra?utc_iso=1990-04-20T05:25:00+00:00&lat=16.7&lon=74.25
+    """
+    try:
+        birth = type("B", (), {"utc_iso": utc_iso, "latitude": lat, "longitude": lon})()
+        natal = compute_natal(birth)
+        jd = jd_from_datetime(natal.utc_birth_dt)
+
+        # Moon longitude
+        moon_lon = natal.planet_longitudes["moon"]
+
+        # Nakshatra details
+        span = 360.0 / 27.0
+        idx = int(moon_lon // span)
+        frac = (moon_lon - idx * span) / span
+        nakshatras = [
+            "Ashwini","Bharani","Krittika","Rohini","Mrigashira","Ardra","Punarvasu",
+            "Pushya","Ashlesha","Magha","Purva Phalguni","Uttara Phalguni","Hasta",
+            "Chitra","Swati","Vishakha","Anuradha","Jyeshtha","Mula","Purva Ashadha",
+            "Uttara Ashadha","Shravana","Dhanishta","Shatabhisha","Purva Bhadrapada",
+            "Uttara Bhadrapada","Revati"
+        ]
+        nname = nakshatras[idx % 27]
+
+        # Current maha lord from Moon nakshatra
+        lord = VIM_SEQUENCE[idx % 9]
+        balance = VIM_DURATIONS_YEARS[lord] * (1.0 - frac)
+
+        return {
+            "moon_longitude": round(moon_lon, 4),
+            "nakshatra_index": idx,
+            "nakshatra_name": nname,
+            "nakshatra_fraction": round(frac, 4),
+            "maha_dasha_lord": lord,
+            "remaining_years_in_dasha": round(balance, 2),
+            "engine": ENGINE_VERSION,
+            "module": compute_natal.__module__,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+@app.get("/debug/dasha")
+def debug_dasha(utc_iso: str, lat: float, lon: float, levels: int = 2, limit: int = 12):
+    birth = type("B", (), {"utc_iso": utc_iso, "latitude": lat, "longitude": lon})()
+    from app.astrology.engine import compute_natal, compute_vimshottari_dasha_for_birth, jd_from_datetime, subdivide_vimshottari
+    natal = compute_natal(birth)
+    jd = jd_from_datetime(natal.utc_birth_dt)
+    dasha = compute_vimshottari_dasha_for_birth(jd)
+    subs = subdivide_vimshottari(dasha, levels=levels)
+    rows = [
+        {
+            "level": s["level"],
+            "lord": s["lord"],
+            "start": s["start_iso"],
+            "end": s["end_iso"],
+        }
+        for s in subs[:max(1, limit)]
+    ]
+    return {"engine": ENGINE_VERSION, "rows": rows}
 
 
 @app.get("/debug/engine")
@@ -139,51 +214,66 @@ def debug_rules():
     }
 
 
-@app.post("/api/v1/predict")
-def predict(b: BirthPayload, request: Request):
+@app.post("/api/v1/predict_event")
+def predict_event(b: EventPayload, request: Request):
     try:
         natal = compute_natal(b)
-        jd = jd_from_datetime(natal.utc_birth_dt)
-        dasha = compute_vimshottari_dasha_for_birth(jd)
-        transits = current_transits(natal)
+        birth_jd = jd_from_datetime(natal.utc_birth_dt)
+        dasha = compute_vimshottari_dasha_for_birth(birth_jd)
 
-        # fire rules based on transit triggers
-        fired = []
-        for r in rule_lib.rules:
-            if transits.active.get(r.trigger, False):
-                r.date_from = dasha.window_from
-                r.date_to = dasha.window_to
-                fired.append(r)
+        subs = subdivide_vimshottari(dasha, levels=3)  # maha+antara+pratyantara
+        now_iso = datetime.now(timezone.utc).isoformat()
+        focus = [x.lower() for x in QUESTION_FOCUS.get(b.question, [])]
+        min_age = AGE_MIN.get(b.question, 16.0)
 
-        # fallback: at least one rule so UI shows something
-        if not fired and rule_lib.rules:
-            fd = rule_lib.rules[0]
-            fd.date_from = dasha.window_from
-            fd.date_to = dasha.window_to
-            fired = [fd]
+        # future-only
+        future = [s for s in subs if s["end_iso"] > now_iso]
 
-        phrased = [
-            phrase_prediction(r, natal=natal, dasha=dasha, transits=transits, tone=b.tone)
-            for r in fired
-        ]
+        # enforce age floor at start_jd
+        aged = [s for s in future if age_years_at_jd(birth_jd, s["start_jd"]) >= min_age]
 
-        today = phrased[0]["message"] if phrased else "A steady stretch—work the basics."
-        week = phrased[1]["message"] if len(phrased) > 1 else today
-        key_dates = [{"from": r.date_from, "to": r.date_to, "theme": r.theme} for r in fired]
+        # 1) prefer focused pratyantara, 2) focused antara, 3) any pratyantara, 4) any antara, 5) next maha above age floor
+        def pick(cands, wanted_focus=True, level=None):
+            pool = [c for c in cands if (level is None or c["level"] == level)]
+            if wanted_focus and focus:
+                pool = [c for c in pool if c["lord"].lower() in focus]
+            return min(pool, key=lambda x: x["start_jd"]) if pool else None
 
-        record_event_with_ga("prediction_requested", {
-            "tone": b.tone, "ip": request.client.host, "themes": [r.theme for r in fired]
-        })
+        chosen = (
+            pick(aged, True, "pratyantara") or
+            pick(aged, True, "antara") or
+            pick(aged, False, "pratyantara") or
+            pick(aged, False, "antara") or
+            pick([c for c in aged if c["level"] == "maha"], False, None)
+        )
+        if not chosen:
+            # absolute fallback: earliest future subperiod if age filters exclude everything
+            chosen = min(future, key=lambda x: x["start_jd"])
+
+        # format
+        def _ym(iso):
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            return dt.year, dt.month
+        ys, ms = _ym(chosen["start_iso"])
+        ye, me = _ym(chosen["end_iso"])
+        lord = chosen["lord"].title()
+        labels = {"marriage":"marriage","child":"childbirth","promotion":"promotion","travel":"foreign travel"}
+        qtxt = labels.get(b.question, "event")
+        summary = f"Likely window for {qtxt}: {calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye} (sub-period lord: {lord})."
+
+        record_event_with_ga("event_prediction", {"q": b.question, "ip": request.client.host, "lord": lord, "min_age": min_age})
 
         return {
-            "today": today,
-            "week": week,
-            "key_dates": key_dates,
-            "dasha": {"maha": dasha.maha, "antara": dasha.antara},
+            "question": b.question,
+            "window_start": chosen["start_iso"],
+            "window_end": chosen["end_iso"],
+            "likely_month_year": {"from":{"year":ys,"month":ms}, "to":{"year":ye,"month":me}},
+            "level": chosen["level"],
+            "dasha_lord": lord,
+            "summary": summary
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 @app.post("/api/v1/predict_event")
 def predict_event(b: EventPayload, request: Request):
