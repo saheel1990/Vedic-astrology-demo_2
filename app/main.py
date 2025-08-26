@@ -217,6 +217,25 @@ def debug_rules():
         ],
     }
 
+from zoneinfo import ZoneInfo
+
+def ensure_utc_iso(b):
+    if b.utc_iso:
+        return b.utc_iso
+    if b.local_iso:
+        tzname = b.tz or "UTC"
+        dt_local = datetime.fromisoformat(b.local_iso)
+        if dt_local.tzinfo is None:
+            dt_local = dt_local.replace(tzinfo=ZoneInfo(tzname))
+        else:
+            # if user provided offset, ignore tz field
+            pass
+        return dt_local.astimezone(timezone.utc).isoformat()
+    raise ValueError("Provide either utc_iso or (local_iso + tz)")
+
+# inside predict_event:
+b.utc_iso = ensure_utc_iso(b)
+
 
 @app.post("/api/v1/predict_event")
 def predict_event(b: EventPayload, request: Request):
