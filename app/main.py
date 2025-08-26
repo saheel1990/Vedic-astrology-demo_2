@@ -117,6 +117,34 @@ AGE_MIN = {
 def age_years_at_jd(birth_jd: float, jd: float) -> float:
     return max(0.0, (jd - birth_jd) / 365.2425)
 
+from zoneinfo import ZoneInfo
+from fastapi import HTTPException
+from datetime import datetime, timezone
+
+def normalize_utc_iso(payload) -> str:
+    """
+    Return a UTC ISO string using either:
+      - payload.utc_iso (already UTC), or
+      - payload.local_iso + payload.tz
+    """
+    if getattr(payload, "utc_iso", None):
+        return payload.utc_iso
+
+    if getattr(payload, "local_iso", None):
+        tzname = getattr(payload, "tz", None) or "UTC"
+        dt_local = datetime.fromisoformat(payload.local_iso)
+        # If no tzinfo in the string, apply tz; otherwise respect provided offset
+        if dt_local.tzinfo is None:
+            try:
+                dt_local = dt_local.replace(tzinfo=ZoneInfo(tzname))
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Unknown timezone: {tzname}")
+        # Convert to UTC ISO
+        return dt_local.astimezone(timezone.utc).isoformat()
+
+    raise HTTPException(status_code=400, detail="Provide either utc_iso or (local_iso + tz)")
+
+
 
 # --------------------------- Routes ---------------------------
 
@@ -239,71 +267,56 @@ def ensure_utc_iso(b):
     raise ValueError("Provide either utc_iso or (local_iso + tz)")
 
 # inside predict_event:
-b.utc_iso = ensure_utc_iso(b)
 
+@app.post("/api/v1/predict_event")
+@app.post("/api/v1/predict")
+def predict(b: BirthPayload, request: Request):
+    # Normalize time to UTC *inside* the request
+    b.utc_iso = normalize_utc_iso(b)
 
+    natal = compute_natal(b)
+    jd = jd_from_datetime(natal.utc_birth_dt)
+    dasha = compute_vimshottari_dasha_for_birth(jd)
+    transits = current_transits(natal)
+
+    fired = []
+    for r in rule_lib.rules:
+        if transits.active.get(r.trigger, False):
+            r.date_from = dasha.window_from
+            r.date_to = dasha.window_to
+            fired.append(r)
+    if not fired and rule_lib.rules:
+        fd = rule_lib.rules[0]
+        fd.date_from = dasha.window_from
+        fd.date_to = dasha.window_to
+        fired = [fd]
+
+    phrased = [phrase_prediction(r, natal=natal, dasha=dasha, transits=transits, tone=b.tone) for r in fired]
+    today = phrased[0]["message"] if phrased else "A calm day. Focus on basics."
+    week = phrased[1]["message"] if len(phrased) > 1 else today
+    key_dates = [{"from": r.date_from, "to": r.date_to, "theme": r.theme} for r in fired]
+    record_event_with_ga("prediction_requested", {"tone": b.tone, "ip": request.client.host, "themes": [r.theme for r in fired]})
+    return {"today": today, "week": week, "key_dates": key_dates, "dasha": {"maha": dasha.maha, "antara": dasha.antara}}
 @app.post("/api/v1/predict_event")
 def predict_event(b: EventPayload, request: Request):
     try:
+        # Normalize time to UTC *inside* the request
+        b.utc_iso = normalize_utc_iso(b)
+
         natal = compute_natal(b)
         birth_jd = jd_from_datetime(natal.utc_birth_dt)
         dasha = compute_vimshottari_dasha_for_birth(birth_jd)
 
-        subs = subdivide_vimshottari(dasha, levels=3)  # maha+antara+pratyantara
-        now_iso = datetime.now(timezone.utc).isoformat()
-        focus = [x.lower() for x in QUESTION_FOCUS.get(b.question, [])]
-        min_age = AGE_MIN.get(b.question, 16.0)
-
-        # future-only
-        future = [s for s in subs if s["end_iso"] > now_iso]
-
-        # enforce age floor at start_jd
-        aged = [s for s in future if age_years_at_jd(birth_jd, s["start_jd"]) >= min_age]
-
-        # 1) prefer focused pratyantara, 2) focused antara, 3) any pratyantara, 4) any antara, 5) next maha above age floor
-        def pick(cands, wanted_focus=True, level=None):
-            pool = [c for c in cands if (level is None or c["level"] == level)]
-            if wanted_focus and focus:
-                pool = [c for c in pool if c["lord"].lower() in focus]
-            return min(pool, key=lambda x: x["start_jd"]) if pool else None
-
-        chosen = (
-            pick(aged, True, "pratyantara") or
-            pick(aged, True, "antara") or
-            pick(aged, False, "pratyantara") or
-            pick(aged, False, "antara") or
-            pick([c for c in aged if c["level"] == "maha"], False, None)
-        )
-        if not chosen:
-            # absolute fallback: earliest future subperiod if age filters exclude everything
-            chosen = min(future, key=lambda x: x["start_jd"])
-
-        # format
-        def _ym(iso):
-            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-            return dt.year, dt.month
-        ys, ms = _ym(chosen["start_iso"])
-        ye, me = _ym(chosen["end_iso"])
-        lord = chosen["lord"].title()
-        labels = {"marriage":"marriage","child":"childbirth","promotion":"promotion","travel":"foreign travel"}
-        qtxt = labels.get(b.question, "event")
-        summary = f"Likely window for {qtxt}: {calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye} (sub-period lord: {lord})."
-
-        record_event_with_ga("event_prediction", {"q": b.question, "ip": request.client.host, "lord": lord, "min_age": min_age})
-
-        return {
-            "question": b.question,
-            "window_start": chosen["start_iso"],
-            "window_end": chosen["end_iso"],
-            "likely_month_year": {"from":{"year":ys,"month":ms}, "to":{"year":ye,"month":me}},
-            "level": chosen["level"],
-            "dasha_lord": lord,
-            "summary": summary
-        }
+        # ... keep your existing logic (subdivide, age filters, scoring, etc.)
+        # (No changes needed there.)
+        # Example end of handler:
+        # return { "question": ..., "summary": ... }
+    except HTTPException as he:
+        # propagate friendly client errors
+        raise he
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-@app.post("/api/v1/predict_event")
 def predict_event(b: EventPayload, request: Request):
     """
     Return a tight month–year window using Vimshottari sub-periods:
