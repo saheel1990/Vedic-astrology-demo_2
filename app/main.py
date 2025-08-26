@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from app.astrology.engine import subdivide_vimshottari
 import os
 
 # Rules (Excel/CSV loader)
