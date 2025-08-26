@@ -164,3 +164,90 @@ def admin_dashboard_post(request: Request, password: str = Form(...)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
     summary = query_summary()
     return templates.TemplateResponse("dashboard.html", {"request": request, "authed": True, "data": summary})
+
+# --- Event prediction payload ---
+
+class EventPayload(BaseModel):
+    name: Optional[str] = None
+    dob: str
+    utc_iso: str
+    country: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    question: str  # "marriage" | "child" | "promotion" | "travel"
+    tone: Optional[str] = "Friendly"
+# --- Simple KP-flavoured mapping for demo windows ---
+from datetime import timezone
+import calendar
+
+QUESTION_FOCUS = {
+    "marriage":  ["venus","jupiter","moon"],
+    "child":     ["jupiter","venus","moon"],
+    "promotion": ["saturn","jupiter","mercury","sun","mars"],
+    "travel":    ["rahu","jupiter","mercury","moon"],
+}
+
+def _month_year_from_iso(iso_str: str):
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    return dt.year, dt.month
+
+def _pick_event_window(dasha_ctx, question: str):
+    """Pick first FUTURE period whose lord suits the question; else first future."""
+    focus = [x.lower() for x in QUESTION_FOCUS.get(question, [])]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # try preferred lords
+    for p in dasha_ctx.periods:
+        if p.end_iso > now_iso and (p.planet or "").lower() in focus:
+            return p.start_iso, p.end_iso, p.planet
+    # else first future
+    for p in dasha_ctx.periods:
+        if p.end_iso > now_iso:
+            return p.start_iso, p.end_iso, p.planet
+    # ultimate fallback: current window
+    return dasha_ctx.window_from, dasha_ctx.window_to, dasha_ctx.maha or "Unknown"
+
+from fastapi.responses import JSONResponse
+
+@app.post("/api/v1/predict_event")
+def predict_event(b: EventPayload, request: Request):
+    try:
+        # coordinates are optional now; if present they still flow into compute_natal
+        natal = compute_natal(b)
+        jd = jd_from_datetime(natal.utc_birth_dt)
+        dasha = compute_vimshottari_dasha_for_birth(jd)
+
+        start_iso, end_iso, lord = _pick_event_window(dasha, b.question)
+        ys, ms = _month_year_from_iso(start_iso)
+        ye, me = _month_year_from_iso(end_iso)
+
+        qtxt = {
+            "marriage":  "marriage",
+            "child":     "childbirth",
+            "promotion": "promotion",
+            "travel":    "foreign travel",
+        }.get(b.question, "event")
+
+        summary = (
+            f"Most likely window for {qtxt}: "
+            f"{calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye} "
+            f"(Dasha lord: {lord})."
+        )
+
+        record_event_with_ga("event_prediction", {
+            "q": b.question, "ip": request.client.host, "lord": lord
+        })
+
+        return {
+            "question": b.question,
+            "window_start": start_iso,
+            "window_end": end_iso,
+            "likely_month_year": {"from": {"year": ys, "month": ms}, "to": {"year": ye, "month": me}},
+            "dasha_lord": lord,
+            "summary": summary,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
