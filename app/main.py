@@ -65,6 +65,7 @@ class BirthPayload(BaseModel):
     longitude: float
     tone: Optional[str] = "Friendly"
 
+# in EventPayload (replace your existing class)
 class EventPayload(BaseModel):
     name: Optional[str] = None
     dob: str
@@ -78,6 +79,11 @@ class EventPayload(BaseModel):
     longitude: Optional[float] = None
     question: str  # "marriage" | "child" | "promotion" | "travel"
     tone: Optional[str] = "Friendly"
+
+    # NEW: selection controls
+    direction: Optional[str] = "future"   # "future" | "past" | "nearest"
+    anchor_iso: Optional[str] = None      # ISO date to center search around (UTC or with offset)
+
 
 # =========================
 # Helpers
@@ -385,27 +391,65 @@ def predict(b: BirthPayload, request: Request):
 @app.post("/api/v1/predict_event")
 def predict_event(b: EventPayload, request: Request):
     try:
-        # Normalize time to UTC inside the request
+        # Normalize time to UTC
         b.utc_iso = normalize_utc_iso(b)
 
+        # Build natal & dasha
         natal = compute_natal(b)
         birth_jd = jd_from_datetime(natal.utc_birth_dt)
         dasha = compute_vimshottari_dasha_for_birth(birth_jd)
-
         subs = subdivide_vimshottari(dasha, levels=3)  # maha+antara+pratyantara
-        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Anchor/date logic
+        if b.anchor_iso:
+            anchor_dt = datetime.fromisoformat(b.anchor_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
+        else:
+            anchor_dt = datetime.now(timezone.utc)
+        anchor_iso = anchor_dt.isoformat()
+        anchor_jd = jd_from_datetime(anchor_dt)
+        direction = (b.direction or "future").lower()
+
+        # Age floor
         min_age = AGE_MIN.get(b.question, 16.0)
 
-        # future-only & age floor
-        future = [s for s in subs if s["end_iso"] > now_iso]
-        aged = [s for s in future if age_years_at_jd(birth_jd, s["start_jd"]) >= min_age]
+        # Filter by direction
+        if direction == "future":
+            pool = [s for s in subs if s["end_iso"] > anchor_iso]
+        elif direction == "past":
+            pool = [s for s in subs if s["start_iso"] <= anchor_iso]
+        else:  # "nearest"
+            pool = subs[:]  # both sides
 
-        # Score & pick best
+        # Apply age floor at start_jd (still fine for past validations)
+        pool = [s for s in pool if age_years_at_jd(birth_jd, s["start_jd"]) >= min_age]
+
+        if not pool:
+            # last resort: drop age floor if nothing matches
+            pool = [s for s in subs if (direction != "future" or s["end_iso"] > anchor_iso)]
+            if not pool:
+                pool = subs
+
+        # Rank by KP score, then closeness to anchor (days)
+        def days_from_anchor(sub):
+            return abs(sub["start_jd"] - anchor_jd)
+
         ranked = sorted(
-            aged,
-            key=lambda s: (-score_subperiod(natal, s, b.question), s["start_jd"])
+            pool,
+            key=lambda s: (
+                -score_subperiod(natal, s, b.question),
+                days_from_anchor(s),
+                s["start_jd"]
+            )
         )
-        chosen = ranked[0] if ranked else (min(future, key=lambda x: x["start_jd"]) if future else subs[0])
+
+        # For a strict "past" request, prefer latest before anchor among top scored
+        if direction == "past":
+            # take best score among top 10, then latest by start_jd
+            top_score = score_subperiod(natal, ranked[0], b.question) if ranked else -1e9
+            close = [s for s in ranked if abs(score_subperiod(natal, s, b.question) - top_score) < 1e-6]
+            chosen = max(close, key=lambda x: x["start_jd"]) if close else (ranked[0] if ranked else subs[0])
+        else:
+            chosen = ranked[0] if ranked else subs[0]
 
         # Format response
         def _ym(iso):
@@ -419,7 +463,10 @@ def predict_event(b: EventPayload, request: Request):
         qtxt = labels.get(b.question, "event")
         summary = f"Likely window for {qtxt}: {calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye} (sub-period lord: {lord})."
 
-        record_event_with_ga("event_prediction", {"q": b.question, "ip": request.client.host, "lord": lord, "min_age": min_age})
+        record_event_with_ga("event_prediction", {
+            "q": b.question, "dir": direction, "ip": request.client.host,
+            "lord": lord, "min_age": min_age, "anchor": anchor_iso
+        })
 
         return {
             "question": b.question,
@@ -430,10 +477,12 @@ def predict_event(b: EventPayload, request: Request):
             "dasha_lord": lord,
             "summary": summary
         }
+
     except HTTPException as he:
         raise he
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
 
 # =========================
 # Admin analytics
