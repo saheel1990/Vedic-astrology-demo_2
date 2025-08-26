@@ -1,9 +1,19 @@
 # app/main.py
 # top of app/main.py
 try:
-    from app.astrology.engine import subdivide_vimshottari
+    from app.astrology.engine import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+    )
 except ImportError:
-    from app.astrology.engine_stub import subdivide_vimshottari  # use stub if real engine not present
+    from app.astrology.engine_stub import (
+        compute_natal,
+        compute_vimshottari_dasha_for_birth,
+        current_transits,
+        subdivide_vimshottari,
+    )
 
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from datetime import datetime, timezone
