@@ -48,7 +48,7 @@ class BirthPayload(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index_v2.html", {"request": request})
 
 @app.get("/health")
 def health():
