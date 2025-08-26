@@ -6,6 +6,8 @@ except ImportError:
     from app.astrology.engine_stub import subdivide_vimshottari  # use stub if real engine not present
 
 from fastapi import FastAPI, Request, HTTPException, status, Form
+from datetime import datetime, timezone
+import calendar
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,81 +75,53 @@ def debug_engine():
 from fastapi.responses import JSONResponse
 import hashlib, random
 
-@app.post("/api/v1/predict")
-def predict(b: BirthPayload, request: Request):
+from datetime import datetime, timezone
+import calendar
+
+@app.post("/api/v1/predict_event")
+def predict_event(b: EventPayload, request: Request):
     try:
         natal = compute_natal(b)
         jd = jd_from_datetime(natal.utc_birth_dt)
         dasha = compute_vimshottari_dasha_for_birth(jd)
-        transits = current_transits(natal)
 
-        # --- Build a deterministic seed so different inputs pick different rules
-        seed_key = f"{b.name or ''}|{b.dob}|{b.utc_iso}|{natal.moon_sign}|{int(natal.ascendant_deg)}"
-        seed = int(hashlib.sha256(seed_key.encode()).hexdigest(), 16) % (2**32)
-        rng = random.Random(seed)
+        subs = subdivide_vimshottari(dasha, levels=3)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        focus = [x.lower() for x in QUESTION_FOCUS.get(b.question, [])]
 
-        # --- Map stub transit flags to broad theme hints
-        theme_scores = {
-            "career": 0,
-            "marriage": 0,
-            "education": 0,
-            "wealth": 0,
-            "property": 0,
-            "travel": 0,
-            "health": 0,
-            "children": 0,
-            "litigation": 0,
-            "general": 0,
+        future_praty = [s for s in subs if s["level"]=="pratyantara" and s["end_iso"] > now_iso]
+        future_antara = [s for s in subs if s["level"]=="antara" and s["end_iso"] > now_iso]
+
+        def pick(cands, want_focus=True):
+            if want_focus and focus:
+                filt = [x for x in cands if x["lord"].lower() in focus]
+                if filt: return min(filt, key=lambda x: x["start_jd"])
+            return min(cands, key=lambda x: x["start_jd"]) if cands else None
+
+        chosen = pick(future_praty, True) or pick(future_antara, True) or pick(future_praty, False) or pick(future_antara, False)
+        if not chosen:
+            chosen = min([s for s in subs if s["level"]=="maha"], key=lambda x: x["start_jd"])
+
+        ys = datetime.fromisoformat(chosen["start_iso"].replace("Z","+00:00")).year
+        ms = datetime.fromisoformat(chosen["start_iso"].replace("Z","+00:00")).month
+        ye = datetime.fromisoformat(chosen["end_iso"].replace("Z","+00:00")).year
+        me = datetime.fromisoformat(chosen["end_iso"].replace("Z","+00:00")).month
+
+        lord = chosen["lord"].title()
+        qtxt = {"marriage":"marriage","child":"childbirth","promotion":"promotion","travel":"foreign travel"}.get(b.question,"event")
+        summary = f"Likely window for {qtxt}: {calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye} (sub-period lord: {lord})."
+
+        return {
+            "question": b.question,
+            "window_start": chosen["start_iso"],
+            "window_end": chosen["end_iso"],
+            "likely_month_year": {"from":{"year":ys,"month":ms}, "to":{"year":ye,"month":me}},
+            "level": chosen["level"],
+            "dasha_lord": lord,
+            "summary": summary
         }
-        if transits.active.get("saturn_in_10th"):      theme_scores["career"] += 2
-        if transits.active.get("venus_transit_7th"):   theme_scores["marriage"] += 2
-        if transits.active.get("jupiter_aspecting_10th_lord"): theme_scores["education"] += 1; theme_scores["wealth"] += 1
-
-        # Add a tiny deterministic nudge from Moon sign, to vary users/dates
-        moon_bias = (hashlib.md5(natal.moon_sign.encode()).hexdigest()[0])
-        bias_bucket = "career" if moon_bias in "0123" else "marriage" if moon_bias in "456" else "education"
-        theme_scores[bias_bucket] += 1
-
-        # Pick a primary theme, then a secondary for "week" message
-        ordered = sorted(theme_scores.items(), key=lambda kv: kv[1], reverse=True)
-        primary_theme = ordered[0][0]
-        secondary_theme = ordered[1][0] if len(ordered) > 1 else "general"
-
-        # Select rules whose trigger encodes that theme
-        def pick_for(theme_name: str):
-            tag = f"theme_{theme_name}"
-            bucket = [r for r in rule_lib.rules if r.trigger.lower() == tag]
-            if not bucket:
-                # fallback to general, then any
-                bucket = [r for r in rule_lib.rules if r.trigger.lower() == "theme_general"] or rule_lib.rules
-            return rng.choice(bucket) if bucket else None
-
-        r1 = pick_for(primary_theme)
-        r2 = pick_for(secondary_theme)
-
-        fired = [r for r in (r1, r2) if r is not None]
-
-        # Dates from dasha window (kept simple)
-        for r in fired:
-            r.date_from = dasha.window_from
-            r.date_to = dasha.window_to
-
-        # Phrase
-        phrased = [phrase_prediction(r, natal=natal, dasha=dasha, transits=transits, tone=b.tone) for r in fired]
-        today = phrased[0]["message"] if phrased else "A steady period—work the basics."
-        week = phrased[1]["message"] if len(phrased) > 1 else today
-        key_dates = [{"from": r.date_from, "to": r.date_to, "theme": r.theme} for r in fired]
-
-        record_event_with_ga("prediction_requested", {
-            "tone": b.tone, "ip": request.client.host,
-            "themes": [r.theme for r in fired], "primary": primary_theme
-        })
-
-        return {"today": today, "week": week, "key_dates": key_dates,
-                "dasha": {"maha": dasha.maha, "antara": dasha.antara}}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 @app.get("/debug/rules")
 def debug_rules():
