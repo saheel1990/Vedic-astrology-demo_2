@@ -8,14 +8,6 @@ from app.astrology.engine_stub import (
     subdivide_vimshottari,
 )
 
-except ImportError:
-    from app.astrology.engine_stub import (
-        compute_natal,
-        compute_vimshottari_dasha_for_birth,
-        current_transits,
-        subdivide_vimshottari,
-    )
-
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from datetime import datetime, timezone
 import calendar
