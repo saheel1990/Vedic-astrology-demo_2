@@ -1,4 +1,10 @@
 # app/main.py
+# top of app/main.py
+try:
+    from app.astrology.engine import subdivide_vimshottari
+except ImportError:
+    from app.astrology.engine_stub import subdivide_vimshottari  # use stub if real engine not present
+
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
