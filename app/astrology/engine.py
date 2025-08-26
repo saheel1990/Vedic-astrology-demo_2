@@ -1,26 +1,19 @@
 # app/astrology/engine.py
 
 # Try real KP engine first, fallback to stub if import fails
+from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional
+from datetime import datetime, timezone
+import math
+
+# Swiss Ephemeris (pyswisseph) — import FIRST
 try:
-    from app.astrology.engine import (
-        compute_natal,
-        compute_vimshottari_dasha_for_birth,
-        current_transits,
-        subdivide_vimshottari,
-        ENGINE_VERSION,
-        jd_from_datetime,
-    )
-except Exception:
-    from app.astrology.engine_stub import (
-        compute_natal,
-        compute_vimshottari_dasha_for_birth,
-        current_transits,
-        subdivide_vimshottari,
-        ENGINE_VERSION,
-    )
-    from datetime import datetime
-    def jd_from_datetime(dt: datetime) -> float:
-        return dt.timestamp() / 86400.0 + 2440587.5
+    import swisseph as sw
+except Exception as e:
+    raise ImportError(
+        "pyswisseph is missing or failed to import. "
+        "Add 'pyswisseph>=2.10' to requirements.txt and use Python 3.11."
+    ) from e
 
 
 # ───────────── Swiss Ephemeris config (KP ayanāṃśa, Moshier mode) ─────────────
