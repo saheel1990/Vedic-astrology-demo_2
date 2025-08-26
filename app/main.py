@@ -71,14 +71,18 @@ class BirthPayload(BaseModel):
 class EventPayload(BaseModel):
     name: Optional[str] = None
     dob: str
-    utc_iso: str
+    # EITHER provide utc_iso, OR provide local_iso + tz
+    utc_iso: Optional[str] = None
+    local_iso: Optional[str] = None
+    tz: Optional[str] = None
     country: Optional[str] = None
     state: Optional[str] = None
     city: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    question: str  # "marriage" | "child" | "promotion" | "travel"
+    question: str
     tone: Optional[str] = "Friendly"
+
 
 
 QUESTION_FOCUS: Dict[str, List[str]] = {
