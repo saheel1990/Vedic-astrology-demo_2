@@ -59,19 +59,23 @@ rule_lib = RuleLibrary.load_default()
 
 # --------------------------- Models ---------------------------
 
+from pydantic import BaseModel
+from typing import Optional
+
 class BirthPayload(BaseModel):
     name: Optional[str] = None
     dob: str
-    utc_iso: str
+    # Provide either utc_iso OR (local_iso + tz)
+    utc_iso: Optional[str] = None
+    local_iso: Optional[str] = None
+    tz: Optional[str] = None
     latitude: float
     longitude: float
     tone: Optional[str] = "Friendly"
 
-
 class EventPayload(BaseModel):
     name: Optional[str] = None
     dob: str
-    # EITHER provide utc_iso, OR provide local_iso + tz
     utc_iso: Optional[str] = None
     local_iso: Optional[str] = None
     tz: Optional[str] = None
@@ -80,8 +84,9 @@ class EventPayload(BaseModel):
     city: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    question: str
+    question: str  # "marriage" | "child" | "promotion" | "travel"
     tone: Optional[str] = "Friendly"
+
 
 
 
