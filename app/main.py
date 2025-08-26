@@ -117,8 +117,17 @@ def home(request: Request):
 
 @app.get("/health")
 def health():
-    # Show which engine is active
-    return {"ok": True, "engine": ENGINE_VERSION}
+    """
+    Health check showing which engine is actually active.
+    - engine: version string from ENGINE_VERSION
+    - module: where compute_natal is being imported from
+    """
+    return {
+        "ok": True,
+        "engine": ENGINE_VERSION,
+        "module": compute_natal.__module__,
+    }
+
 
 
 @app.get("/debug/engine")
