@@ -9,6 +9,8 @@ try:
         subdivide_vimshottari,
         ENGINE_VERSION,
         jd_from_datetime,
+        compute_csl_for_houses,     # NEW
+        planet_significators,       # NEW
     )
 except Exception:
     from app.astrology.engine_stub import (
@@ -21,6 +23,10 @@ except Exception:
     from datetime import datetime as _DT
     def jd_from_datetime(dt: _DT) -> float:
         return dt.timestamp() / 86400.0 + 2440587.5
+    # Stub: fallbacks for debug routes
+    def compute_csl_for_houses(n): return {str(i): "venus" for i in range(1,13)}
+    def planet_significators(n): return {}
+
 
 from fastapi import FastAPI, Request, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -29,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import calendar
 import importlib, traceback, os
@@ -141,7 +147,7 @@ RULERS = {
 QUESTION_HOUSES = {
     "marriage":  ["7","2","11"],
     "child":     ["5","2","9"],
-    "promotion": ["10","11","2"],
+    "promotion": ["10","11","2","6"],
     "travel":    ["9","12","3"],
 }
 
@@ -175,46 +181,42 @@ def soft_aspect_score(a_deg: float, b_deg: float, orb: float = 6.0) -> float:
 
 def score_subperiod(natal, sub, question: str) -> float:
     """
-    Score subperiods by:
-      + lord focus match
-      + if sub-lord equals a key house lord
-      + aspect-ish bonus between sub-lord and those house lords
-      + tiny preference for deeper granularity
+    KP-flavoured DBA scoring:
+      - Use planet significators (star-lord, own, sign-lord weights).
+      - For the subperiod's lord (and optionally its parent/maha) aggregate support
+        for the target houses, subtract opposing houses.
+      - Still keep a tiny preference for deeper periods.
     """
-    lord = sub["lord"].lower()
+    TARGETS = {
+        "marriage":  (["7","2","11"], ["1","6","10"]),
+        "child":     (["5","2","11","9"], ["1","4","10"]),
+        "promotion": (["10","11","2","6"], ["12","8"]),   # include 6 for service
+        "travel":    (["12","9","3"], ["4","2"]),         # residence vs travel tensions
+    }
+    pos, neg = TARGETS.get((question or "").lower(), (["7","2","11"], ["1","6","10"]))
+
+    sig = planet_significators(natal)
+
+    # Consider the sub-lord; add small contributions from its parent and maha if present
+    l_sub = sub["lord"].lower()
+    l_par = (sub.get("parent") or "").lower()
+    # try to find maha parent if present in our list (we can pass it in via subdivider, but here we keep it simple)
+
+    def planet_score(pl: str, k: float) -> float:
+        m = sig.get(pl, {})
+        pos_s = sum(m.get(h, 0.0) for h in pos)
+        neg_s = sum(m.get(h, 0.0) for h in neg)
+        return k * (pos_s - 0.8 * neg_s)  # penalize negatives mildly
+
     score = 0.0
+    score += planet_score(l_sub, 1.0)
+    if l_par:
+        score += planet_score(l_par, 0.4)
 
-    # Focus match
-    focus = [x.lower() for x in QUESTION_FOCUS.get(question, [])]
-    if lord in focus:
-        score += 2.0
-
-    # Key houses for the question
-    houses = QUESTION_HOUSES.get(question, [])
-    targets = []
-    for h in houses:
-        hl = house_lord(natal, h)
-        if hl:
-            targets.append(hl)
-
-    # Sub-lord equals key house lord
-    if lord in targets:
-        score += 1.5
-
-    # Aspect-ish bonus
-    l_lon = planet_lon(natal, lord)
-    if l_lon is not None:
-        for t in targets:
-            t_lon = planet_lon(natal, t)
-            if t_lon is None:
-                continue
-            score += 0.5 * soft_aspect_score(l_lon, t_lon, orb=6.0)
-
-    # Prefer deeper periods
-    level_priority = {"pratyantara": 0.2, "antara": 0.1, "maha": 0.0}
-    score += level_priority.get(sub["level"], 0.0)
-
+    # Tiny edge for deeper period
+    score += {"pratyantara": 0.25, "antara": 0.12, "maha": 0.0}.get(sub["level"], 0.0)
     return score
+
 
 # =========================
 # Pages
@@ -354,6 +356,30 @@ def debug_calc(utc_iso: str, lat: float, lon: float, levels: int = 3, limit: int
             }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/debug/csl")
+def debug_csl(utc_iso: str, lat: float, lon: float):
+    birth = type("B", (), {"utc_iso": utc_iso, "latitude": lat, "longitude": lon})()
+    natal = compute_natal(birth)
+    csl = compute_csl_for_houses(natal)
+    return {
+        "engine": ENGINE_VERSION,
+        "cusps_deg": [round(x, 4) for x in natal.house_cusps_deg],
+        "csl": csl,
+    }
+
+@app.get("/debug/significators")
+def debug_significators(utc_iso: str, lat: float, lon: float):
+    birth = type("B", (), {"utc_iso": utc_iso, "latitude": lat, "longitude": lon})()
+    natal = compute_natal(birth)
+    sig = planet_significators(natal)
+    # Show top 5 houses per planet for readability
+    view = {}
+    for p, fmap in sig.items():
+        top = sorted(fmap.items(), key=lambda kv: -kv[1])[:5]
+        view[p] = [{"house": h, "w": round(w, 2)} for h, w in top]
+    return {"engine": ENGINE_VERSION, "top": view}
+
 
 # =========================
 # Core APIs
