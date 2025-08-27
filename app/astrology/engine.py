@@ -73,6 +73,142 @@ def nakshatra_index_and_fraction(moon_lon: float) -> Tuple[int, float, float]:
     frac = (moon_lon - start) / span                   # 0..1 within that nakshatra
     return idx, frac, span
 
+# ---- KP: star-lord & sub-lord helpers ----
+
+NAK_SPAN = 360.0 / 27.0  # 13°20'
+
+def star_lord_at(lon: float) -> str:
+    """Nakshatra lord at longitude (sidereal)."""
+    idx = int(normalize_deg(lon) // NAK_SPAN)
+    return VIM_SEQUENCE[idx % 9]  # KP uses Vimshottari sequence
+
+def sub_lord_at(lon: float) -> str:
+    """
+    KP Sub-Lord inside nakshatra:
+    Split nakshatra by Vimshottari proportions in the SAME sequence,
+    starting from the nakshatra's own lord.
+    """
+    lon = normalize_deg(lon)
+    n0 = int(lon // NAK_SPAN)
+    start_deg = n0 * NAK_SPAN
+    f = (lon - start_deg) / NAK_SPAN  # 0..1 inside this nakshatra
+
+    # Build proportional segments
+    seq = VIM_SEQUENCE[:]  # order inside nakshatra
+    total = sum(VIM_DURATIONS_YEARS[p] for p in seq)  # 120
+    cum = 0.0
+    for p in seq:
+        seg = VIM_DURATIONS_YEARS[p] / total  # fraction of nakshatra
+        if cum <= f < cum + seg or abs(f - (cum + seg)) < 1e-12:
+            return p
+        cum += seg
+    return seq[-1]
+
+# ---- Houses: which house contains a longitude? ----
+
+def _arc(a: float, b: float) -> float:
+    """Forward arc from a->b in [0,360)."""
+    return (normalize_deg(b) - normalize_deg(a)) % 360.0
+
+def house_num_of_lon(lon: float, cusps: List[float]) -> int:
+    """
+    Return house number (1..12) containing longitude 'lon',
+    given a list of 12 cusp longitudes in zodiac order starting at 1st.
+    """
+    lon = normalize_deg(lon)
+    for i in range(12):
+        a = cusps[i]
+        b = cusps[(i + 1) % 12]
+        w = _arc(a, b) if i < 11 else (360.0 - sum(_arc(cusps[j], cusps[(j+1)%12]) for j in range(11)))
+        # check if lon lies within forward arc a -> a+w
+        if _arc(a, lon) < w or abs(_arc(a, lon) - w) < 1e-12:
+            return i + 1
+    # fallback
+    return 1
+
+def compute_csl_for_houses(natal: "NatalContext") -> Dict[str, str]:
+    """
+    KP Cuspal Sub-Lords (CSL) for houses 1..12:
+    sub-lord of each cusp longitude.
+    """
+    csl = {}
+    for i, cusp_lon in enumerate(natal.house_cusps_deg, start=1):
+        csl[str(i)] = sub_lord_at(cusp_lon)
+    return csl
+RULERS = {
+    "Aries":"mars","Taurus":"venus","Gemini":"mercury","Cancer":"moon","Leo":"sun",
+    "Virgo":"mercury","Libra":"venus","Scorpio":"mars","Sagittarius":"jupiter",
+    "Capricorn":"saturn","Aquarius":"saturn","Pisces":"jupiter"
+}
+
+def planet_owned_houses(natal: "NatalContext", planet: str) -> List[str]:
+    """Houses where the cusp sign is ruled by 'planet'."""
+    out = []
+    for h, sign in natal.house_map.items():
+        if RULERS.get(sign, "") == planet.lower():
+            out.append(h)
+    return out
+
+def planet_significators(natal: "NatalContext") -> Dict[str, Dict[str, float]]:
+    """
+    For each planet P, compute house weights (KP-flavoured, simplified):
+      3× houses of P's star-lord (its placement + ownership),
+      2× P's own placement + ownership,
+      1× houses of P's sign-lord (placement + ownership).
+    Nodes (rahu/ketu): also include star-lord and sign-lord packages.
+    """
+    weights: Dict[str, Dict[str, float]] = {}
+
+    for p, p_lon in natal.planet_longitudes.items():
+        p = p.lower()
+        wmap: Dict[str, float] = {}
+
+        # own placement house
+        p_house = str(house_num_of_lon(p_lon, natal.house_cusps_deg))
+
+        # own ownership houses
+        own_owned = planet_owned_houses(natal, p)
+
+        # star-lord & sign-lord
+        s_lord = star_lord_at(p_lon)
+        zsign = sign_from_longitude(p_lon)
+        sign_lord = RULERS.get(zsign, "")
+
+        # Helper to add weights
+        def add(houses: List[str], w: float):
+            for h in houses:
+                wmap[h] = wmap.get(h, 0.0) + w
+
+        # P's star-lord:
+        if s_lord:
+            # star-lord placement & ownership
+            s_lon = natal.planet_longitudes.get(s_lord)
+            if s_lon is not None:
+                add([str(house_num_of_lon(s_lon, natal.house_cusps_deg))], 3.0)
+            add(planet_owned_houses(natal, s_lord), 3.0)
+
+        # P itself
+        add([p_house], 2.0)
+        add(own_owned, 2.0)
+
+        # sign-lord:
+        if sign_lord:
+            s2_lon = natal.planet_longitudes.get(sign_lord)
+            if s2_lon is not None:
+                add([str(house_num_of_lon(s2_lon, natal.house_cusps_deg))], 1.0)
+            add(planet_owned_houses(natal, sign_lord), 1.0)
+
+        # Node substitution: inherit star/sign lords (no conj/aspect here)
+        if p in ("rahu", "ketu"):
+            # already accounted via star/sign above for p itself;
+            # this keeps nodes aligned without overcount if missing longitudes.
+            pass
+
+        weights[p] = wmap
+
+    return weights
+
+
 # ───────────── Constants ─────────────
 
 PLANETS = {
@@ -99,7 +235,9 @@ class NatalContext:
     ascendant_deg: float
     moon_sign: str
     planet_longitudes: Dict[str, float]
-    house_map: Dict[str, str]
+    house_map: Dict[str, str]             # sign on each house cusp
+    house_cusps_deg: List[float]          # 12 house cusp longitudes (deg)
+
 
 @dataclass
 class DashaPeriod:
@@ -161,15 +299,17 @@ def compute_natal(birth) -> NatalContext:
     house_map = {str(i + 1): sign_from_longitude(cusps[i]) for i in range(12)}
     moon_sign = sign_from_longitude(longs["moon"])
 
-    return NatalContext(
+      return NatalContext(
         utc_birth_dt=dt_utc,
         latitude=float(birth.latitude),
         longitude=float(birth.longitude),
         ascendant_deg=asc_deg,
         moon_sign=moon_sign,
         planet_longitudes=longs,
-        house_map=house_map
+        house_map=house_map,
+        house_cusps_deg=cusps,
     )
+
 
 def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     """
