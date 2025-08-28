@@ -719,6 +719,34 @@ def debug_promise(payload: dict):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.get("/debug/backtest_csv")
+def backtest_csv():
+    import csv, pathlib
+    path = pathlib.Path("app/data/kp_examples.csv")
+    if not path.exists():
+        return {"error": "kp_examples.csv not found"}
+    rows = []
+    with path.open() as f:
+        for r in csv.DictReader(f):
+            birth = {
+                "utc_iso": r["utc_iso"],
+                "latitude": float(r["lat"]),
+                "longitude": float(r["lon"]),
+                "question": r["event"],
+                "direction": "nearest",
+                "anchor_iso": r["date"]+"T00:00:00+00:00"
+            }
+            res = predict_event_kp(birth)
+            rows.append({
+                "name": r["name"], "event": r["event"], "target_date": r["date"],
+                "promised": res.get("promised"),
+                "picked_from": res.get("primary_window", {}).get("from"),
+                "picked_to": res.get("primary_window", {}).get("to"),
+                "dba": res.get("primary_window", {}).get("dba"),
+                "score": res.get("primary_window", {}).get("score"),
+            })
+    return rows
+
 # =========================
 # Admin analytics
 # =========================
