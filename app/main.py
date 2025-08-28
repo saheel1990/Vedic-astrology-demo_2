@@ -95,6 +95,72 @@ class EventPayload(BaseModel):
 # Helpers
 # =========================
 
+from app.astrology.event_policies import EVENT_POLICIES
+from datetime import datetime, timezone
+import calendar
+
+def _age_on(dt_birth: datetime, iso_str: str) -> float:
+    return (datetime.fromisoformat(iso_str.replace("Z","+00:00")) - dt_birth).days / 365.2425
+
+def _score_planet_for_event(sig_map, lord, Hpos, Hneg, focus):
+    m = sig_map.get(lord.lower(), {})
+    s = sum(m.get(h,0.0) for h in Hpos) - 0.8 * sum(m.get(h,0.0) for h in Hneg)
+    return s + 0.5*focus.get(lord.lower(), 0.0)
+
+def select_dba_windows(natal, dasha_ctx, question: str, direction="nearest", anchor_iso=None):
+    pol = EVENT_POLICIES.get(question, EVENT_POLICIES["marriage"])
+    Hpos, Hneg = pol["houses_pos"], pol["houses_neg"]
+    focus = pol.get("focus_planets", {})
+    age_min, age_max = pol["age_min"], pol["age_max"]
+
+    sig = planet_significators(natal)
+    subs = subdivide_vimshottari(dasha_ctx, levels=3)
+    # Make (M,A,P) triplets inside each maha
+    triplets = []
+    for m in [s for s in subs if s["level"]=="maha"]:
+        A = [a for a in subs if a["level"]=="antara" and a["parent"]==m["lord"] and m["start_jd"] <= a["start_jd"] < m["end_jd"]]
+        for a in A:
+            P = [p for p in subs if p["level"]=="pratyantara" and p["parent"]==a["lord"] and a["start_jd"] <= p["start_jd"] < a["end_jd"]]
+            if not P:
+                triplets.append((m,a,None))
+            else:
+                for p in P:
+                    triplets.append((m,a,p))
+
+    # Score & filter by age window
+    rows = []
+    for (M,A,P) in triplets:
+        win = P or A or M
+        age_start = _age_on(natal.utc_birth_dt, win["start_iso"])
+        age_end   = _age_on(natal.utc_birth_dt, win["end_iso"])
+        if (age_end < age_min) or (age_start > age_max):
+            continue  # implausible
+
+        sM = _score_planet_for_event(sig, M["lord"], Hpos, Hneg, focus)
+        sA = _score_planet_for_event(sig, A["lord"], Hpos, Hneg, focus) if A else 0.0
+        sP = _score_planet_for_event(sig, P["lord"], Hpos, Hneg, focus) if P else 0.0
+        score = 0.3*sM + 0.6*sA + 1.0*sP + (0.2 if P else 0.0)
+
+        rows.append({
+            "score": round(score, 3),
+            "maha": M, "antara": A, "praty": P,
+            "age_range": (round(age_start,1), round(age_end,1)),
+        })
+
+    # Direction/anchor ranking
+    if anchor_iso:
+        anchor = datetime.fromisoformat(anchor_iso.replace("Z","+00:00"))
+        ajd = jd_from_datetime(anchor)
+        def dist(r):
+            w = r["praty"] or r["antara"] or r["maha"]
+            return abs(w["start_jd"] - ajd)
+        rows.sort(key=lambda r: (-r["score"], dist(r)))
+    else:
+        rows.sort(key=lambda r: -r["score"])
+
+    return rows[:12]  # top 12 candidates
+
+
 def normalize_utc_iso(payload) -> str:
     """
     Return a UTC ISO string using either:
@@ -563,6 +629,76 @@ def predict_event(b: EventPayload, request: Request):
         raise he
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/v1/predict_event_kp")
+def predict_event_kp(b: dict):
+    try:
+        # build natal
+        birth = type("B", (), b)()
+        natal = compute_natal(birth)
+        pr = promise_score_for_event(natal, b.get("question","marriage"))
+        if not pr["promised"]:
+            return {
+                "question": b.get("question"),
+                "promised": False,
+                "message": "Event not strongly promised by CSL mapping.",
+                "diagnostics": pr
+            }
+
+        # dasha & windows
+        jd = jd_from_datetime(natal.utc_birth_dt)
+        dasha = compute_vimshottari_dasha_for_birth(jd)
+
+        rows = select_dba_windows(
+            natal, dasha,
+            b.get("question","marriage"),
+            direction=b.get("direction","nearest"),
+            anchor_iso=b.get("anchor_iso")
+        )
+
+        if not rows:
+            return {"promised": True, "message": "No plausible windows in age range.", "diagnostics": pr}
+
+        best = rows[0]
+        win = best["praty"] or best["antara"] or best["maha"]
+        ys = datetime.fromisoformat(win["start_iso"].replace("Z","+00:00")).year
+        ms = datetime.fromisoformat(win["start_iso"].replace("Z","+00:00")).month
+        ye = datetime.fromisoformat(win["end_iso"].replace("Z","+00:00")).year
+        me = datetime.fromisoformat(win["end_iso"].replace("Z","+00:00")).month
+
+        import calendar
+        return {
+            "question": b.get("question"),
+            "promised": True,
+            "primary_window": {
+                "from": win["start_iso"], "to": win["end_iso"],
+                "month_range": f"{calendar.month_name[ms]} {ys} – {calendar.month_name[me]} {ye}",
+                "dba": {
+                    "maha": best["maha"]["lord"].title(),
+                    "antara": best["antara"]["lord"].title() if best["antara"] else None,
+                    "praty": best["praty"]["lord"].title() if best["praty"] else None
+                },
+                "score": best["score"],
+                "age_range": best["age_range"],
+            },
+            "alternates": [
+                {
+                    "from": (r["praty"] or r["antara"] or r["maha"])["start_iso"],
+                    "to":   (r["praty"] or r["antara"] or r["maha"])["end_iso"],
+                    "score": r["score"],
+                    "dba": {
+                        "maha": r["maha"]["lord"].title(),
+                        "antara": r["antara"]["lord"].title() if r["antara"] else None,
+                        "praty": r["praty"]["lord"].title() if r["praty"] else None
+                    },
+                    "age_range": r["age_range"],
+                } for r in rows[1:5]
+            ],
+            "diagnostics": pr
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.post("/debug/promise")
 def debug_promise(payload: dict):
