@@ -564,6 +564,24 @@ def predict_event(b: EventPayload, request: Request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/debug/promise")
+def debug_promise(payload: dict):
+    """
+    JSON body:
+    {
+      "utc_iso": "...Z",
+      "latitude": 18.52,
+      "longitude": 73.8567,
+      "event": "marriage"
+    }
+    """
+    try:
+        b = type("B", (), payload)()
+        natal = compute_natal(b)
+        out = promise_score_for_event(natal, payload.get("event","marriage"))
+        return out
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 # =========================
 # Admin analytics
