@@ -25,7 +25,7 @@ except Exception as e:
         sw.set_sid_mode(sw.SIDM_LAHIRI)
     except Exception:
         pass
-
+FLAGS = sw.FLG_MOSEPH | sw.FLG_SPEED | sw.FLG_SIDEREAL
 
 # Vimśottarī sequence (9 lords, 120 years total)
 VIM_SEQUENCE = ["ketu", "venus", "sun", "moon", "mars", "rahu", "jupiter", "saturn", "mercury"]
