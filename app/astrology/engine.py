@@ -399,25 +399,26 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     """
     out: List[Dict[str, Any]] = []
 
-    def add_block(level, lord, start_jd, end_jd, parent=None):
+    def add_block(level: str, lord: str, start_jd: float, end_jd: float, parent: Optional[str] = None):
         out.append({
             "level": level,
             "lord": lord,
-            "parent": parent,              # for antara: maha lord; for pratyantara: antara lord
+            "parent": parent,  # for antara: maha lord; for pratyantara: antara lord
             "start_jd": float(start_jd),
             "end_jd": float(end_jd),
             "start_iso": datetime_from_jd(start_jd).isoformat(),
             "end_iso": datetime_from_jd(end_jd).isoformat(),
         })
 
+    # Iterate through computed Maha periods
     for maha in getattr(dasha_ctx, "periods", []):
-        m_lord = maha.planet.lower()
+        m_lord = (maha.planet or "").lower()
         m_start, m_end = float(maha.start_jd), float(maha.end_jd)
         add_block("maha", m_lord, m_start, m_end, parent=None)
         if levels < 2:
             continue
 
-        # ── ANTARA: rotate sequence so it begins with MAHA lord ──
+        # ── ANTARA: rotate sequence so it begins with this MAHA lord ──
         m_len = m_end - m_start
         start_idx = VIM_SEQUENCE.index(m_lord)
         antara_seq = [VIM_SEQUENCE[(start_idx + i) % 9] for i in range(9)]
@@ -429,14 +430,14 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
             a_start, a_end = cursor, min(cursor + span, m_end)
             add_block("antara", lord, a_start, a_end, parent=m_lord)
             cursor = a_end
-            if cursor >= m_end - 1e-6:
+            if cursor >= m_end - 1e-9:
                 break
 
         if levels < 3:
             continue
 
         # ── PRATYANTARA: for each antara, rotate so it begins with that antara lord ──
-        for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord]:
+        for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord and m_start - 1e-9 <= x["start_jd"] <= m_end + 1e-9]:
             a_len = a["end_jd"] - a["start_jd"]
             start_idx = VIM_SEQUENCE.index(a["lord"])
             praty_seq = [VIM_SEQUENCE[(start_idx + i) % 9] for i in range(9)]
@@ -448,11 +449,10 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
                 p_start, p_end = cursor, min(cursor + span2, a["end_jd"])
                 add_block("pratyantara", lord2, p_start, p_end, parent=a["lord"])
                 cursor = p_end
-                if cursor >= a["end_jd"] - 1e-6:
+                if cursor >= a["end_jd"] - 1e-9:
                     break
 
     return out
-
 
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
     if as_of_dt is None:
