@@ -266,23 +266,42 @@ class TransitContext:
     active: Dict[str, Any]
 
 # ───────────── Core calculations ─────────────
+# make sure these are at the top of engine.py
+from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional
+from datetime import datetime, timezone
+import math
+import swisseph as sw
 
-def compute_natal(birth) -> NatalContext:
+# ... (your helpers: normalize_deg, sign_from_longitude, calc_lon, jd_from_datetime, datetime_from_jd, etc.)
+
+@dataclass
+class NatalContext:
+    utc_birth_dt: datetime
+    latitude: float
+    longitude: float
+    ascendant_deg: float
+    moon_sign: str
+    planet_longitudes: Dict[str, float]
+    house_map: Dict[str, str]            # sign on each house cusp
+    house_cusps_deg: List[float]         # 12 cusp longitudes in degrees
+
+def compute_natal(birth) -> "NatalContext":
     """
     birth must include:
-      - utc_iso: ISO datetime string (with tz, e.g. 1990-04-20T05:25:00+00:00)
+      - utc_iso: ISO datetime string WITH timezone (UTC recommended)
       - latitude: float
       - longitude: float
     """
     if not getattr(birth, "utc_iso", None):
-        raise ValueError("birth.utc_iso is required")
+        raise ValueError("birth.utc_iso is required (e.g., 1990-04-20T05:25:00+00:00)")
     if not hasattr(birth, "latitude") or not hasattr(birth, "longitude"):
         raise ValueError("birth.latitude and birth.longitude are required")
 
     dt_utc = datetime.fromisoformat(birth.utc_iso).astimezone(timezone.utc)
     jd_ut = jd_from_datetime(dt_utc)
 
-    # Planets (sidereal KP)
+    # Planet longitudes
     longs: Dict[str, float] = {}
     for name, const in PLANETS.items():
         if name == "ketu":
@@ -291,20 +310,24 @@ def compute_natal(birth) -> NatalContext:
         else:
             longs[name] = calc_lon(jd_ut, const)
 
-    # Houses
-    cusps_raw, _ascmc = sw.houses(jd_ut, float(birth.latitude), float(birth.longitude))
+    # House cusps (handle both 12 and 13-length returns)
+    cusps_raw, _ascmc = sw.houses(
+        jd_ut,
+        float(birth.latitude),
+        float(birth.longitude)
+    )
     cusps_list = list(cusps_raw)
     if len(cusps_list) >= 13 and abs(cusps_list[0]) < 1e-9:
         cusps_vals = cusps_list[1:13]
     else:
         cusps_vals = cusps_list[:12]
-    cusps = [normalize_deg(x) for x in cusps_vals]
+    cusps = [normalize_deg(c) for c in cusps_vals]
 
     asc_deg = cusps[0]
     house_map = {str(i + 1): sign_from_longitude(cusps[i]) for i in range(12)}
     moon_sign = sign_from_longitude(longs["moon"])
 
-      return NatalContext(
+    return NatalContext(
         utc_birth_dt=dt_utc,
         latitude=float(birth.latitude),
         longitude=float(birth.longitude),
@@ -314,8 +337,6 @@ def compute_natal(birth) -> NatalContext:
         house_map=house_map,
         house_cusps_deg=cusps,
     )
-
-
 def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
     """
     KP-style Vimshottari:
