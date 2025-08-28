@@ -380,6 +380,61 @@ def debug_significators(utc_iso: str, lat: float, lon: float):
         view[p] = [{"house": h, "w": round(w, 2)} for h, w in top]
     return {"engine": ENGINE_VERSION, "top": view}
 
+@app.get("/debug/dba_active")
+def debug_dba_active(
+    utc_iso: str,            # birth UTC, e.g. 1990-04-19T23:52:00Z
+    lat: float,
+    lon: float,
+    asof: str               # date/time to check, e.g. 2025-08-28T00:00:00Z
+):
+    """
+    Returns the active Maha / Antara / Pratyantara at a specific date/time.
+    """
+    try:
+        # normalize inputs (accept ...Z or ...+00:00)
+        if utc_iso.endswith("Z"): utc_iso = utc_iso.replace("Z","+00:00")
+        if asof.endswith("Z"): asof = asof.replace("Z","+00:00")
+
+        birth = type("B", (), {"utc_iso": utc_iso, "latitude": lat, "longitude": lon})()
+        natal = compute_natal(birth)
+        jd_birth = jd_from_datetime(natal.utc_birth_dt)
+        dasha = compute_vimshottari_dasha_for_birth(jd_birth)
+
+        # date to check
+        asof_dt = datetime.fromisoformat(asof)
+        asof_jd = jd_from_datetime(asof_dt)
+
+        # find maha containing asof
+        maha = None
+        for p in dasha.periods:
+            if p.start_jd <= asof_jd < p.end_jd:
+                maha = {"lord": p.planet.lower(), "start": p.start_iso, "end": p.end_iso, "start_jd": p.start_jd, "end_jd": p.end_jd}
+                break
+        if not maha:
+            return {"error": "as-of date outside computed dasha window"}
+
+        # subdivide only this maha (levels=3 with correct rotation)
+        sub_all = subdivide_vimshottari(
+            type("D", (), {"periods": [type("P", (), maha)()]})(), levels=3
+        )
+
+        antara = next((s for s in sub_all if s["level"]=="antara" and s["start_jd"] <= asof_jd < s["end_jd"]), None)
+        praty  = next((s for s in sub_all if s["level"]=="pratyantara" and s["start_jd"] <= asof_jd < s["end_jd"]), None)
+
+        return {
+            "engine": ENGINE_VERSION,
+            "as_of": asof_dt.isoformat(),
+            "maha": maha["lord"].title() if maha else None,
+            "antara": antara["lord"].title() if antara else None,
+            "pratyantara": praty["lord"].title() if praty else None,
+            "maha_window": {"from": maha["start"], "to": maha["end"]} if maha else None,
+            "antara_window": {"from": antara["start_iso"], "to": antara["end_iso"]} if antara else None if antara else None,
+            "praty_window": {"from": praty["start_iso"], "to": praty["end_iso"]} if praty else None,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 
 # =========================
 # Core APIs
