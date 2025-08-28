@@ -84,25 +84,30 @@ def star_lord_at(lon: float) -> str:
 
 def sub_lord_at(lon: float) -> str:
     """
-    KP Sub-Lord inside nakshatra:
-    Split nakshatra by Vimshottari proportions in the SAME sequence,
-    starting from the nakshatra's own lord.
+    KP Sub-Lord inside a nakshatra:
+    Split the 13°20' nakshatra by Vimshottari proportions,
+    BUT the sequence starts from THAT nakshatra's star-lord, not from Ketu.
     """
     lon = normalize_deg(lon)
+    NAK_SPAN = 360.0 / 27.0
     n0 = int(lon // NAK_SPAN)
     start_deg = n0 * NAK_SPAN
-    f = (lon - start_deg) / NAK_SPAN  # 0..1 inside this nakshatra
+    f = (lon - start_deg) / NAK_SPAN  # fraction inside this nakshatra (0..1)
 
-    # Build proportional segments
-    seq = VIM_SEQUENCE[:]  # order inside nakshatra
-    total = sum(VIM_DURATIONS_YEARS[p] for p in seq)  # 120
+    # Rotate Vim sequence so it STARTS at the nakshatra's star-lord
+    star = VIM_SEQUENCE[n0 % 9]
+    idx0 = VIM_SEQUENCE.index(star)
+    seq = [VIM_SEQUENCE[(idx0 + i) % 9] for i in range(9)]
+
+    total = 120.0
     cum = 0.0
     for p in seq:
-        seg = VIM_DURATIONS_YEARS[p] / total  # fraction of nakshatra
+        seg = VIM_DURATIONS_YEARS[p] / total  # fractional length of this sub-lord
         if cum <= f < cum + seg or abs(f - (cum + seg)) < 1e-12:
             return p
         cum += seg
     return seq[-1]
+
 
 # ---- Houses: which house contains a longitude? ----
 
@@ -363,16 +368,21 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
         window_to=periods[0].end_iso,
         periods=periods
     )
-
-def subdivide_vimshottari(dasha_ctx, levels: int = 2):
-    """Split Maha into Antara (and Pratyantara) with Vimshottari ratios."""
+    
+    def subdivide_vimshottari(dasha_ctx, levels: int = 2) -> List[Dict[str, Any]]:
+    """
+    Split Maha → Antara → Pratyantara by Vimshottari ratios.
+    CORRECT ORDER:
+      - Antara list starts from the parent MAHA lord, then follows the cycle
+      - Pratyantara list starts from the parent ANTARA lord, then follows the cycle
+    """
     out: List[Dict[str, Any]] = []
 
     def add_block(level, lord, start_jd, end_jd, parent=None):
         out.append({
             "level": level,
             "lord": lord,
-            "parent": parent,
+            "parent": parent,              # for antara: maha lord; for pratyantara: antara lord
             "start_jd": float(start_jd),
             "end_jd": float(end_jd),
             "start_iso": datetime_from_jd(start_jd).isoformat(),
@@ -380,16 +390,20 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
         })
 
     for maha in getattr(dasha_ctx, "periods", []):
-        m_lord = (maha.planet or "").lower()
+        m_lord = maha.planet.lower()
         m_start, m_end = float(maha.start_jd), float(maha.end_jd)
         add_block("maha", m_lord, m_start, m_end, parent=None)
         if levels < 2:
             continue
 
+        # ── ANTARA: rotate sequence so it begins with MAHA lord ──
         m_len = m_end - m_start
+        start_idx = VIM_SEQUENCE.index(m_lord)
+        antara_seq = [VIM_SEQUENCE[(start_idx + i) % 9] for i in range(9)]
+
         cursor = m_start
-        for lord in VIM_SEQUENCE:
-            frac = VIM_DURATIONS_YEARS[lord] / VIM_TOTAL
+        for lord in antara_seq:
+            frac = VIM_DURATIONS_YEARS[lord] / 120.0
             span = m_len * frac
             a_start, a_end = cursor, min(cursor + span, m_end)
             add_block("antara", lord, a_start, a_end, parent=m_lord)
@@ -400,11 +414,15 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
         if levels < 3:
             continue
 
+        # ── PRATYANTARA: for each antara, rotate so it begins with that antara lord ──
         for a in [x for x in out if x["level"] == "antara" and x["parent"] == m_lord]:
             a_len = a["end_jd"] - a["start_jd"]
+            start_idx = VIM_SEQUENCE.index(a["lord"])
+            praty_seq = [VIM_SEQUENCE[(start_idx + i) % 9] for i in range(9)]
+
             cursor = a["start_jd"]
-            for lord2 in VIM_SEQUENCE:
-                frac2 = VIM_DURATIONS_YEARS[lord2] / VIM_TOTAL
+            for lord2 in praty_seq:
+                frac2 = VIM_DURATIONS_YEARS[lord2] / 120.0
                 span2 = a_len * frac2
                 p_start, p_end = cursor, min(cursor + span2, a["end_jd"])
                 add_block("pratyantara", lord2, p_start, p_end, parent=a["lord"])
@@ -413,6 +431,7 @@ def subdivide_vimshottari(dasha_ctx, levels: int = 2):
                     break
 
     return out
+
 
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
     if as_of_dt is None:
