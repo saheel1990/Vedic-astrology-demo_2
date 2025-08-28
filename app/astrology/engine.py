@@ -12,9 +12,20 @@ import swisseph as sw
 
 ENGINE_VERSION = "kp-ephem-1.0"
 
-# Use sidereal KP ayanāṃśa + Moshier ephemeris, return speed for stable tuple lengths
-sw.set_sid_mode(sw.SIDM_KP)
-FLAGS = sw.FLG_MOSEPH | sw.FLG_SPEED | sw.FLG_SIDEREAL  # sidereal longitudes
+# --- Sidereal mode: KP (Krishnamurti); fall back if not present ---
+try:
+    KP_CONST = getattr(sw, "SIDM_KRISHNAMURTI", None) or getattr(sw, "SIDM_KP", None)
+    if KP_CONST is None:
+        # last-resort fallback so import never crashes
+        KP_CONST = sw.SIDM_LAHIRI
+    sw.set_sid_mode(KP_CONST)
+except Exception as e:
+    # Never crash on import; default to Lahiri if anything odd happens
+    try:
+        sw.set_sid_mode(sw.SIDM_LAHIRI)
+    except Exception:
+        pass
+
 
 # Vimśottarī sequence (9 lords, 120 years total)
 VIM_SEQUENCE = ["ketu", "venus", "sun", "moon", "mars", "rahu", "jupiter", "saturn", "mercury"]
