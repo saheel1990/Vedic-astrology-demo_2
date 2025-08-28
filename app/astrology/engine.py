@@ -423,6 +423,55 @@ def planet_significators(natal: "NatalContext") -> Dict[str, Dict[str, float]]:
 
     return weights
 
+def promise_score_for_event(natal: "NatalContext", event: str) -> Dict[str, Any]:
+    """
+    KP-style promise check using house cuspal sub-lords (CSL) + significators.
+    For each target house h in H+:
+      - take CSL planet p = sub_lord_at(cusp[h])
+      - look at p's significator weights (planet_significators)
+      - accumulate support: sum(weights on H+) - 0.8 * sum(weights on H-)
+    Returns overall score, per-house breakdown, and a boolean promise flag.
+    """
+    from app.astrology.event_policies import EVENT_POLICIES
+
+    pol = EVENT_POLICIES.get(event, EVENT_POLICIES["marriage"])
+    Hpos, Hneg = pol["houses_pos"], pol["houses_neg"]
+
+    sig = planet_significators(natal)  # {planet: {house: weight}}
+    csl = compute_csl_for_houses(natal)  # { "1": "venus", ... }
+
+    details = []
+    total = 0.0
+    for h in Hpos:
+        p = csl.get(h, "").lower()
+        m = sig.get(p, {})
+        pos = sum(m.get(x, 0.0) for x in Hpos)
+        neg = sum(m.get(x, 0.0) for x in Hneg)
+        sc = pos - 0.8 * neg
+        details.append({"house": h, "csl": p, "pos": round(pos, 2), "neg": round(neg, 2), "score": round(sc, 2)})
+        total += sc
+
+    # Soft boost if CSL planet is one of event focus planets
+    focus = pol.get("focus_planets", {})
+    focus_boost = 0.0
+    for d in details:
+        focus_boost += focus.get(d["csl"], 0.0) * 0.25
+
+    total += focus_boost
+
+    # Threshold: at least half of target houses positive and total > small margin
+    positives = sum(1 for d in details if d["score"] > 0)
+    promised = (positives >= max(1, len(Hpos)//2) and total > 0.5)
+
+    return {
+        "event": event,
+        "score_total": round(total, 2),
+        "promised": promised,
+        "details": details,
+        "focus_boost": round(focus_boost, 2),
+    }
+
+
 # ───────────────────────── Transits (simple demo) ─────────────────────────
 
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
