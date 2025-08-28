@@ -389,7 +389,6 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
         window_to=periods[0].end_iso,
         periods=periods
     )
-    
     def subdivide_vimshottari(dasha_ctx, levels: int = 2) -> List[Dict[str, Any]]:
     """
     Split Maha → Antara → Pratyantara by Vimshottari ratios.
@@ -453,7 +452,6 @@ def compute_vimshottari_dasha_for_birth(jd_ut: float) -> DashaContext:
                     break
 
     return out
-
 def current_transits(natal: NatalContext, as_of_dt: Optional[datetime] = None, orb_deg: float = 1.5) -> TransitContext:
     if as_of_dt is None:
         as_of_dt = datetime.now(timezone.utc)
